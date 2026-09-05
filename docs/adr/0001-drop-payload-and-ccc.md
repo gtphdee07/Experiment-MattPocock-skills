@@ -1,0 +1,5 @@
+# Drop payload and cargo carrying capacity from scope
+
+We considered capturing payload (from the tow vehicle's Tire and Loading Information placard) and Cargo Carrying Capacity (from the trailer's data label), the numbers most towing calculators lead with. We're not computing or displaying either: Axle Overload, Hitched GVWR Overload, and GCWR Overload are all fully answered by actual CAT Scale weights against certification-label ratings, so payload/CCC would only ever be a redundant secondary estimate. They're also less trustworthy than a scale reading — printed payload assumes factory-stock weight (aftermarket accessories silently reduce it) and CCC bakes in an average occupant weight that a real household plus pets and gear can easily exceed — so surfacing them risked giving false confidence next to numbers a scale actually confirms.
+
+**Consequences**: tow vehicle tag capture is limited to the certification label only (no separate Tire and Loading placard needed), and trailer capture to its certification label only — one photo per vehicle, not two.
