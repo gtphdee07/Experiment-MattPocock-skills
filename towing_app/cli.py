@@ -15,9 +15,11 @@ from towing_app.calculations import (
     check_hitched_gvwr_overload,
 )
 from towing_app.field_acquisition import (
+    ClaudeVisionTrailerTagFieldSource,
     ClaudeVisionTruckTagFieldSource,
     FieldSource,
     FieldSourceUnavailableError,
+    WebAxleCountFieldSource,
 )
 from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
@@ -204,13 +206,26 @@ def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
     return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
 
 
-def _resolve_truck_field(
+def _resolve_required_field(
     read: ReadFn, field_source: FieldSource, field: str, prompt: str
 ) -> float:
     proposed = field_source.propose(field)
     if proposed is None:
         print(f"Could not read {field} from the photo - enter it manually.")
         return _read_float(read, prompt)
+    return proposed
+
+
+def _resolve_optional_field(
+    read: ReadFn, field_source: FieldSource, field: str, prompt: str
+) -> float | None:
+    proposed = field_source.propose(field)
+    if proposed is None:
+        print(
+            f"Could not read {field} from the photo - enter it manually, "
+            "or press Enter to skip."
+        )
+        return _read_optional_float(read, prompt)
     return proposed
 
 
@@ -226,11 +241,11 @@ def collect_truck_profile_from_photo(
     `_confirm_truck_profile` gate manual entry uses.
     """
     try:
-        gvwr = _resolve_truck_field(read, field_source, "gvwr", "GVWR (lbs): ")
-        front_gawr = _resolve_truck_field(
+        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        front_gawr = _resolve_required_field(
             read, field_source, "front_gawr", "Front GAWR (lbs): "
         )
-        rear_gawr = _resolve_truck_field(
+        rear_gawr = _resolve_required_field(
             read, field_source, "rear_gawr", "Rear GAWR (lbs): "
         )
     except FieldSourceUnavailableError:
@@ -249,11 +264,18 @@ def _read_int(read: ReadFn, prompt: str) -> int:
     return _prompt_until_valid(read, prompt, int, "whole number")
 
 
-def collect_trailer_profile(read: ReadFn) -> TrailerProfile | None:
-    gvwr = _read_float(read, "GVWR (lbs): ")
-    gawr = _read_float(read, "GAWR, each axle (lbs): ")
-    axle_count = _read_int(read, "Axle count: ")
-    uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
+def _confirm_trailer_profile(
+    read: ReadFn,
+    gvwr: float,
+    gawr: float,
+    axle_count: int,
+    uvw: float | None,
+) -> TrailerProfile | None:
+    """The single confirm-or-discard gate every Trailer Profile passes
+    through - see `_confirm_truck_profile` for the rationale, which applies
+    identically here: manual entry, photo-based tag extraction, and
+    web-looked-up Axle Count all funnel through this same prompt.
+    """
     uvw_display = uvw if uvw is not None else "(not provided)"
 
     confirmed = _confirm(
@@ -265,6 +287,84 @@ def collect_trailer_profile(read: ReadFn) -> TrailerProfile | None:
         return None
 
     return TrailerProfile(gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw)
+
+
+def _collect_axle_count(
+    read: ReadFn,
+    axle_count_source_factory: Callable[[str, str], FieldSource],
+) -> int:
+    """Looks up Axle Count from trailer make/model via
+    `axle_count_source_factory` (default: `WebAxleCountFieldSource`), with
+    manual entry as the fallback whenever the lookup can't find a match or
+    the lookup service itself is unavailable (see ADR 0003) - used by both
+    the manual-entry and photo-based Trailer Profile flows, since Axle Count
+    is never printed on any tag.
+    """
+    make = read("Trailer make: ")
+    model = read("Trailer model: ")
+    axle_count_source = axle_count_source_factory(make, model)
+    try:
+        proposed = axle_count_source.propose("axle_count")
+    except FieldSourceUnavailableError:
+        print(
+            "Couldn't reach the axle-count lookup service - enter axle count manually."
+        )
+        return _read_int(read, "Axle count: ")
+    if proposed is None:
+        print("Could not find axle count for this make/model - enter it manually.")
+        return _read_int(read, "Axle count: ")
+    return int(proposed)
+
+
+def collect_trailer_profile(
+    read: ReadFn,
+    axle_count_source_factory: Callable[[str, str], FieldSource] = (
+        WebAxleCountFieldSource
+    ),
+) -> TrailerProfile | None:
+    gvwr = _read_float(read, "GVWR (lbs): ")
+    gawr = _read_float(read, "GAWR, each axle (lbs): ")
+    axle_count = _read_int(read, "Axle count: ")
+    uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
+    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw)
+
+
+def collect_trailer_profile_from_photo(
+    read: ReadFn,
+    field_source: FieldSource,
+    axle_count_source_factory: Callable[[str, str], FieldSource] = (
+        WebAxleCountFieldSource
+    ),
+) -> TrailerProfile | None:
+    """Proposes GVWR/GAWR/UVW from a photo via `field_source`, and Axle
+    Count via a make/model lookup (`axle_count_source_factory`) - Axle Count
+    is never printed on any tag, so it always goes through the lookup-or-
+    manual path in `_collect_axle_count`, same as GCWR is always manual for
+    Truck Profiles. Every value - proposed, looked up, or manually typed
+    because a source couldn't determine it - is confirmed through the same
+    `_confirm_trailer_profile` gate manual entry uses.
+    """
+    try:
+        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        gawr = _resolve_required_field(
+            read, field_source, "gawr", "GAWR, each axle (lbs): "
+        )
+        uvw = _resolve_optional_field(
+            read,
+            field_source,
+            "uvw",
+            "UVW (lbs, optional - press Enter to skip): ",
+        )
+    except FieldSourceUnavailableError:
+        # The service itself is unreachable, not just this one field - no
+        # point trying the remaining fields against it, and the message
+        # must not imply the photo was the problem (see ADR 0003).
+        print("Couldn't reach the extraction service - enter all values manually.")
+        gvwr = _read_float(read, "GVWR (lbs): ")
+        gawr = _read_float(read, "GAWR, each axle (lbs): ")
+        uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
+    axle_count = _collect_axle_count(read, axle_count_source_factory)
+    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw)
 
 
 def _read_int_with_default(read: ReadFn, prompt: str, current: int) -> int:
@@ -364,8 +464,23 @@ def run_truck_delete(store: TruckStore, read: ReadFn) -> None:
     print("Truck Profile deleted.")
 
 
-def run_trailer_add(store: TrailerStore, read: ReadFn) -> None:
-    profile = collect_trailer_profile(read)
+def run_trailer_add(
+    store: TrailerStore,
+    read: ReadFn,
+    photo_path: Path | None = None,
+    field_source_factory: Callable[
+        [Path], FieldSource
+    ] = ClaudeVisionTrailerTagFieldSource,
+    axle_count_source_factory: Callable[
+        [str, str], FieldSource
+    ] = WebAxleCountFieldSource,
+) -> None:
+    if photo_path is not None:
+        profile = collect_trailer_profile_from_photo(
+            read, field_source_factory(photo_path), axle_count_source_factory
+        )
+    else:
+        profile = collect_trailer_profile(read, axle_count_source_factory)
     if profile is None:
         print("Discarded - Trailer Profile not saved.")
         return
@@ -680,7 +795,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     trailer_parser = subparsers.add_parser("trailer", help="Manage Trailer Profiles")
     trailer_subparsers = trailer_parser.add_subparsers(dest="action", required=True)
-    trailer_subparsers.add_parser("add", help="Create a Trailer Profile")
+    trailer_add_parser = trailer_subparsers.add_parser(
+        "add", help="Create a Trailer Profile"
+    )
+    trailer_add_parser.add_argument(
+        "--photo",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a photo of the trailer's federal certification label. "
+            "When given, GVWR/GAWR/UVW are proposed from the photo instead "
+            "of typed manually; Axle Count is always looked up by "
+            "make/model either way, with manual entry as the fallback when "
+            "the lookup can't find a match. Every proposed value still "
+            "requires confirmation before saving."
+        ),
+    )
     trailer_subparsers.add_parser("list", help="List saved Trailer Profiles")
     trailer_subparsers.add_parser("edit", help="Edit an existing Trailer Profile")
     trailer_subparsers.add_parser("delete", help="Delete a Trailer Profile")
@@ -721,7 +851,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     elif args.entity == "truck" and args.action == "delete":
         run_truck_delete(SqliteTruckStore(db_path), input)
     elif args.entity == "trailer" and args.action == "add":
-        run_trailer_add(SqliteTrailerStore(db_path), input)
+        run_trailer_add(SqliteTrailerStore(db_path), input, photo_path=args.photo)
     elif args.entity == "trailer" and args.action == "list":
         run_trailer_list(SqliteTrailerStore(db_path))
     elif args.entity == "trailer" and args.action == "edit":
