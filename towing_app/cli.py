@@ -676,9 +676,11 @@ def format_weigh_event_results(
 
     `trailer_gvwr_result` is `None` whenever there's no linked Solo Ticket
     for this Weigh Event - also reported as "not evaluated" rather than
-    hidden (see CONTEXT.md: Trailer GVWR Overload). `time_gap_result` is
-    only present at all when a Solo Ticket was linked - unlike the Overload
-    checks it's advisory only and never labeled OVERLOADED/OK (see
+    hidden (see CONTEXT.md: Trailer GVWR Overload). When it's present and
+    not overloaded but `is_near_limit`, an extra "Near limit" line is shown
+    (see ADR 0006) - never alongside an OVERLOADED verdict. `time_gap_result`
+    is only present at all when a Solo Ticket was linked - unlike the
+    Overload checks it's advisory only and never labeled OVERLOADED/OK (see
     CONTEXT.md: Time-Gap Warning)."""
     lines = ["=== Weigh Event Results ===", ""]
 
@@ -755,6 +757,11 @@ def format_weigh_event_results(
             lines.append("  Result: Trailer GVWR Overload detected.")
         else:
             lines.append("  Result: no Trailer GVWR Overload detected.")
+            if trailer_gvwr_result.is_near_limit:
+                lines.append(
+                    "  Near limit: Derived Trailer Weight is within 100 lbs "
+                    "of the Trailer's GVWR."
+                )
     lines.append("")
 
     if time_gap_result is not None:
@@ -824,6 +831,11 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
             f"{record.trailer_gvwr_result.derived_trailer_weight} lbs vs. "
             f"{record.trailer_gvwr_result.gvwr_rating} lbs rated -> {trailer_verdict}"
         )
+        if record.trailer_gvwr_result.is_near_limit:
+            lines.append(
+                "  Near limit: Derived Trailer Weight is within 100 lbs of "
+                "the Trailer's GVWR."
+            )
         if record.time_gap_hours is not None:
             gap = abs(record.time_gap_hours)
             lines.append(f"  Time-Gap: Combined and Solo Tickets {gap} hours apart.")
