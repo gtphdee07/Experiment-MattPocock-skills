@@ -43,19 +43,30 @@ class CombinedTicket:
     `reweigh_reference`, the two are linked automatically (see CONTEXT.md:
     Reweigh Reference). `None` when the ticket doesn't carry one, which is
     the common case for a Combined Ticket entered with no Solo Ticket to
-    link."""
+    link.
+
+    `timestamp` is the ticket's own printed date/time, as a free-form string
+    (e.g. from OCR - see ticket #10). `None` when entered manually, since
+    manual entry has no source for it (see ADR 0005's Time-Gap entry, which
+    still asks for elapsed hours directly rather than deriving it from this
+    field - see ADR 0007). This is distinct from `WeighEventRecord.timestamp`
+    in `towing_app/storage.py`, which is when the record was *saved*, not
+    when the ticket was physically weighed."""
 
     steer: float
     drive: float
     trailer_axle: float
     gross: float
     reweigh_reference: str | None = None
+    timestamp: str | None = None
 
     def __str__(self) -> str:
         base = (
             f"Steer: {self.steer} lb | Drive: {self.drive} lb | "
             f"Trailer Axle: {self.trailer_axle} lb | Gross: {self.gross} lb"
         )
+        if self.timestamp is not None:
+            base += f" | Timestamp: {self.timestamp}"
         if self.reweigh_reference is not None:
             base += f" | Reweigh Ref: {self.reweigh_reference}"
         return base
@@ -68,18 +79,21 @@ class SoloTicket:
     Solo Ticket). No Trailer Axle reading - nothing is hitched behind the
     Tow Vehicle when a Solo Ticket is taken.
 
-    `reweigh_reference` mirrors `CombinedTicket.reweigh_reference` - see
-    that field's docstring."""
+    `reweigh_reference` and `timestamp` mirror `CombinedTicket`'s fields of
+    the same name - see those fields' docstrings."""
 
     steer: float
     drive: float
     gross: float
     reweigh_reference: str | None = None
+    timestamp: str | None = None
 
     def __str__(self) -> str:
         base = (
             f"Steer: {self.steer} lb | Drive: {self.drive} lb | Gross: {self.gross} lb"
         )
+        if self.timestamp is not None:
+            base += f" | Timestamp: {self.timestamp}"
         if self.reweigh_reference is not None:
             base += f" | Reweigh Ref: {self.reweigh_reference}"
         return base

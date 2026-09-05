@@ -1,0 +1,38 @@
+# CAT Scale Ticket OCR: text fields, Solo Ticket's missing Trailer Axle, and the photo-vs-manual prompt
+
+Issue #10 reuses the Claude-vision adapter pattern from tickets #4/#5 to extract Combined and Solo Ticket data from a photo, but the ticket domain differs from a truck/trailer tag in two ways the existing adapters didn't have to handle: two of the six fields (timestamp, Reweigh Reference) are text, not numbers, and a Solo Ticket photo has no Trailer Axle field at all rather than an unreadable one. It also has no natural CLI subcommand to hang a `--photo` flag on, unlike `truck add`/`trailer add`. This ADR records the choices made for all three.
+
+## `TextFieldSource`: a second method, not a wider return type
+
+`FieldSource.propose(field: str) -> float | None` is the seam every existing adapter and every caller (`_resolve_required_field`, `_resolve_optional_field`) is built around. Widening its return type to `float | str | None` to accommodate timestamp/Reweigh Reference would have forced every caller of `propose()` - including `_resolve_required_field`'s `return proposed` for GVWR, GAWR, UVW, axle count - to either narrow the type themselves or accept a weaker return type than they actually need.
+
+Instead, `ClaudeVisionScaleTicketFieldSource` implements a second method, `propose_text(field: str) -> str | None`, alongside `propose()`. A new `TextFieldSource` Protocol (in `towing_app/field_acquisition.py`) declares both methods together; `collect_combined_ticket_from_photo`/`collect_solo_ticket_from_photo` and the two `_resolve_*` helpers for text fields are typed against it. `propose()` still serves Steer/Drive/Trailer Axle/Gross exactly as `_resolve_required_field` already does - unchanged from the truck/trailer pattern.
+
+**Considered option** (rejected): widen `propose()`'s return type. Rejected for the reason above - it would touch every existing `FieldSource` implementation and caller for a distinction (numbers vs. text) that only this one adapter needs.
+
+## A Solo Ticket photo's missing Trailer Axle is "never asked", not "asked and told no"
+
+A Combined Ticket's Trailer Axle can fail to read (a content failure - the photo is fine, the field just didn't OCR) and falls back to manual entry exactly like any other field, via `_resolve_required_field`. A Solo Ticket has no Trailer Axle field on the model at all (see CONTEXT.md: Solo Ticket) - nothing is hitched behind the tow vehicle - so there's no "not applicable" value to invent and no sentinel to add to `ClaudeVisionScaleTicketFieldSource`. `collect_solo_ticket_from_photo` simply never calls `propose("trailer_axle")` in the first place; the adapter doesn't need to know which ticket type it's looking at.
+
+This was checked against the real fixtures: a physical CAT Scale Solo Ticket actually prints `00 LB` for Trailer Axle (see `tests/fixtures/cat_ticket_solo.jpg`), not a blank field - so `propose("trailer_axle")` on a Solo Ticket photo would return `0.0`, not `None`. That's irrelevant to this design: the "never ask" decision was made at the call-site level (what `SoloTicket` has room for), not by trying to detect blank-vs-zero-vs-missing from the OCR output.
+
+**Considered option** (rejected): have the adapter distinguish "not applicable" (Solo Ticket) from "not read" (Combined Ticket, content failure) with a separate sentinel or an `is_solo` flag on the source. Rejected as unnecessary - `SoloTicket` having no `trailer_axle` field already makes "never asked" the only value that type-checks; adding a sentinel would be solving a problem the type system already solves for free.
+
+## Photo-vs-manual is asked per ticket, mid-flow - no `--photo` CLI flag
+
+Truck/Trailer Profiles have a dedicated `add` subcommand, so `--photo` is a natural flag on it (`run_truck_add`, `run_trailer_add`). Combined and Solo Tickets have no equivalent - they're collected interactively inside `run_weigh_event`/`_collect_linked_solo_ticket`, which has no argparse surface of its own. `collect_combined_ticket_interactive`/`collect_solo_ticket_interactive` instead ask "Enter the {ticket} via photo or manually? [p]hoto / [M]anual:" at the exact point each ticket is collected, mirroring `_ask_solo_ticket_choice`'s single-key-response style (anything but `p` means manual, so existing manual-entry callers just answer with anything other than `p`).
+
+**Consequence**: every existing `run_weigh_event` test that types in a Combined or fresh Solo Ticket manually gained one extra scripted response (an empty string, meaning "manual") at the point this question is asked. This is the same kind of test churn ADR 0005 explicitly avoided for the Combined Ticket's Reweigh Reference question by deferring it - but that option isn't available here, since offering a photo path for ticket entry *is* issue #10's core acceptance criterion, not an optional extra step being weighed against its cost.
+
+## A Combined Ticket's OCR'd Reweigh Reference survives the later manual prompt
+
+`_collect_linked_solo_ticket` already asked for the Combined Ticket's Reweigh Reference (see ADR 0005) *after* the Combined Ticket itself was collected, on the reasoning that it's only relevant once a Solo Ticket might link to it. That still holds, but now a photo-based Combined Ticket may already carry a Reweigh Reference read straight off the photo (`collect_combined_ticket_from_photo` extracts it as part of the same vision call that reads the four weights - no extra cost, unlike a manual question). The later prompt used `_read_optional_str`, which treats a blank response as "clear it to `None`" - pressing Enter to keep an already-good OCR'd value would have silently wiped it.
+
+Fixed by swapping in `_read_optional_str_with_default(read, prompt, ticket.reweigh_reference)`: blank input now keeps whatever the ticket already has (`None` for a manually-entered ticket, unchanged from before) instead of always resetting to `None`. This is backward compatible - every existing manual-entry test still gets `None` on a blank response, since `ticket.reweigh_reference` was already `None` at that point for a manually-typed ticket.
+
+## Consequences
+
+- `CombinedTicket` and `SoloTicket` both gained an optional `timestamp: str | None = None` field, following the same pattern as `reweigh_reference` (see ADR 0005). `SqliteWeighEventStore` persists both (`ticket_timestamp`, `solo_timestamp` columns) so a saved `WeighEventRecord`'s tickets round-trip losslessly - same rationale as the existing `combined_reweigh_reference`/`solo_reweigh_reference` columns.
+- Per the task brief for #10, wiring this new ticket timestamp into `check_time_gap`'s elapsed-hours entry is explicitly deferred - ADR 0005 already named this as the natural next step "if/when #10 lands," but actually doing it (parsing two free-form ticket timestamps into a reliable elapsed-hours figure, replacing the manual prompt) is separate scope from adding OCR extraction itself.
+- `ClaudeVisionScaleTicketFieldSource`'s extraction prompt asks for the ticket's date/time as a single free-form string "exactly as printed" rather than a normalized format, since CAT Scale prints a 2-digit year (e.g. `7-12-26`) that a model could reasonably reformat inconsistently across runs; no parsing/validation is attempted on it, mirroring ADR 0005's "ask for the simplest thing the caller actually needs" reasoning for the Time-Gap hours prompt.
+- Real fixtures (`tests/fixtures/cat_ticket_combined.jpg`, `cat_ticket_solo.jpg`) and an opt-in smoke test (`tests/test_real_scale_ticket_photo_smoke.py`) exist alongside the fake-based unit tests in `tests/test_field_acquisition.py`/`tests/test_weigh_event_cli.py`, per issue #10's explicit "no real API calls in the main test suite" acceptance criterion.

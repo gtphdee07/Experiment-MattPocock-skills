@@ -98,6 +98,37 @@ def test_save_and_list_round_trips_unlinked_event_with_no_solo_ticket(
     assert saved.reused_solo_from_timestamp is None
 
 
+def test_save_and_list_round_trips_ticket_timestamp(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=CombinedTicket(
+            steer=5640,
+            drive=9080,
+            trailer_axle=19680,
+            gross=34400,
+            timestamp="7-12-26 10:10",
+        ),
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        solo_ticket=SoloTicket(
+            steer=5000, drive=9720, gross=14720, timestamp="7-11-26 15:50"
+        ),
+        trailer_gvwr_result=TrailerGvwrOverloadResult(
+            derived_trailer_weight=19680, gvwr_rating=23500
+        ),
+    )
+
+    SqliteWeighEventStore(db_path).save(record)
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.ticket.timestamp == "7-12-26 10:10"
+    assert saved.solo_ticket is not None
+    assert saved.solo_ticket.timestamp == "7-11-26 15:50"
+
+
 def test_save_and_list_round_trips_reused_solo_from_timestamp(tmp_path: Path) -> None:
     db_path = tmp_path / "garage.db"
     record = WeighEventRecord(

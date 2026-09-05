@@ -42,6 +42,21 @@ class FieldSource(Protocol):
     def propose(self, field: str) -> float | None: ...
 
 
+class TextFieldSource(Protocol):
+    """A `FieldSource` that also proposes free-text (non-numeric) field
+    values - e.g. a CAT Scale ticket's timestamp or Reweigh Reference,
+    neither of which is a number. `propose` still serves a ticket's numeric
+    axle/Gross Weight fields exactly as `FieldSource` does; `propose_text` is
+    the parallel entry point for the two string fields. Kept as a separate
+    method (rather than widening `propose`'s return type) so every existing
+    `FieldSource` implementation, and every caller typed against it, is
+    unaffected."""
+
+    def propose(self, field: str) -> float | None: ...
+
+    def propose_text(self, field: str) -> str | None: ...
+
+
 MediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 # (image_b64, media_type) -> raw text response from the model.
@@ -79,6 +94,24 @@ _TRAILER_EXTRACTION_PROMPT = (
     "printed alongside them. Respond with ONLY a JSON object of the form "
     '{"gvwr": <number>, "gawr": <number>, "uvw": <number>}, using null for '
     "any value you cannot read. No other text."
+)
+
+
+_SCALE_TICKET_NUMERIC_FIELDS = ("steer", "drive", "trailer_axle", "gross")
+_SCALE_TICKET_TEXT_FIELDS = ("timestamp", "reweigh_reference")
+
+_SCALE_TICKET_EXTRACTION_PROMPT = (
+    "This is a photo of a CAT Scale weigh ticket - either a Combined Ticket "
+    "(a truck and trailer weighed hitched together) or a Solo Ticket (a "
+    "truck weighed alone). Extract the Steer Axle, Drive Axle, Trailer Axle, "
+    "and Gross Weight readings, all in POUNDS. Also extract the ticket's "
+    "printed date and time as a single string exactly as printed (e.g. "
+    '"7-12-26 10:10"), and whatever is written in the "TICKET # OF FULL $ '
+    'WEIGH (IF REWEIGH)" field, if anything. Respond with ONLY a JSON object '
+    'of the form {"steer": <number>, "drive": <number>, "trailer_axle": '
+    '<number>, "gross": <number>, "timestamp": <string or null>, '
+    '"reweigh_reference": <string or null>}, using null for any value you '
+    "cannot read or that isn't printed on this ticket. No other text."
 )
 
 
@@ -140,6 +173,12 @@ def _default_trailer_vision_completion(image_b64: str, media_type: MediaType) ->
     return _vision_completion(image_b64, media_type, _TRAILER_EXTRACTION_PROMPT)
 
 
+def _default_scale_ticket_vision_completion(
+    image_b64: str, media_type: MediaType
+) -> str:
+    return _vision_completion(image_b64, media_type, _SCALE_TICKET_EXTRACTION_PROMPT)
+
+
 def _default_axle_count_lookup(make: str, model: str) -> str:
     """Looks up Axle Count via a Claude web search. Requires
     ANTHROPIC_API_KEY in the env - see `_vision_completion` for how
@@ -187,6 +226,27 @@ def _parse_trailer_tag_fields(raw_text: str) -> dict[str, float | None]:
 
 def _parse_axle_count_fields(raw_text: str) -> dict[str, float | None]:
     return _parse_tag_fields(raw_text, _AXLE_COUNT_FIELDS)
+
+
+def _parse_scale_ticket_fields(raw_text: str) -> dict[str, float | str | None]:
+    all_fields = _SCALE_TICKET_NUMERIC_FIELDS + _SCALE_TICKET_TEXT_FIELDS
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return dict.fromkeys(all_fields)
+
+    if not isinstance(data, dict):
+        return dict.fromkeys(all_fields)
+
+    parsed: dict[str, float | str | None] = {}
+    for field in _SCALE_TICKET_NUMERIC_FIELDS:
+        value = data.get(field)
+        parsed[field] = float(value) if isinstance(value, int | float) else None
+    for field in _SCALE_TICKET_TEXT_FIELDS:
+        value = data.get(field)
+        stripped = value.strip() if isinstance(value, str) else ""
+        parsed[field] = stripped if stripped else None
+    return parsed
 
 
 class ClaudeVisionTruckTagFieldSource:
@@ -272,6 +332,64 @@ class ClaudeVisionTrailerTagFieldSource:
             logger.exception("Claude vision extraction failed for %s", self._photo_path)
             raise FieldSourceUnavailableError(str(exc)) from exc
         return _parse_trailer_tag_fields(raw_text)
+
+
+class ClaudeVisionScaleTicketFieldSource:
+    """Extracts Steer/Drive/Trailer Axle weights, Gross Weight, timestamp,
+    and Reweigh Reference from a CAT Scale ticket photo (see CONTEXT.md: CAT
+    Scale Ticket, Reweigh Reference).
+
+    Mirrors `ClaudeVisionTruckTagFieldSource` for the four numeric fields -
+    `propose()` implements the same `FieldSource` shape, so every field
+    still goes through the same propose-or-manual-entry pattern. Timestamp
+    and Reweigh Reference are free text, not numbers, so they're proposed
+    through the separate `propose_text()` method (see `TextFieldSource`)
+    rather than widening `propose()`'s `float | None` return type.
+
+    A Solo Ticket photo has no Trailer Axle line at all (see CONTEXT.md:
+    Solo Ticket) - this class doesn't need to special-case that itself,
+    because `SoloTicket` has no `trailer_axle` field for a caller to ask
+    about in the first place; `collect_solo_ticket_from_photo` simply never
+    calls `propose("trailer_axle")`. A Combined Ticket's Trailer Axle being
+    unreadable (a content failure) still comes back as `None`, same as any
+    other field, and is resolved through the usual manual-entry fallback."""
+
+    def __init__(
+        self,
+        photo_path: Path,
+        vision_completion: VisionCompletionFn = _default_scale_ticket_vision_completion,
+    ) -> None:
+        self._photo_path = photo_path
+        self._vision_completion = vision_completion
+        self._fields: dict[str, float | str | None] | None = None
+
+    def propose(self, field: str) -> float | None:
+        value = self._propose_any(field)
+        return value if isinstance(value, float) else None
+
+    def propose_text(self, field: str) -> str | None:
+        value = self._propose_any(field)
+        return value if isinstance(value, str) else None
+
+    def _propose_any(self, field: str) -> float | str | None:
+        if self._fields is None:
+            self._fields = self._extract()
+        return self._fields.get(field)
+
+    def _extract(self) -> dict[str, float | str | None]:
+        image_bytes = self._photo_path.read_bytes()
+        image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+        media_type = _media_type_for(self._photo_path)
+        try:
+            raw_text = self._vision_completion(image_b64, media_type)
+        except (anthropic.APIError, TypeError) as exc:
+            # See ClaudeVisionTruckTagFieldSource._extract for why both
+            # anthropic.APIError and a bare TypeError are treated as
+            # service-level failures (raised) rather than content misses
+            # (folded into the all-None return below).
+            logger.exception("Claude vision extraction failed for %s", self._photo_path)
+            raise FieldSourceUnavailableError(str(exc)) from exc
+        return _parse_scale_ticket_fields(raw_text)
 
 
 class WebAxleCountFieldSource:
