@@ -297,7 +297,9 @@ class SqliteWeighEventStore:
                     solo_reweigh_reference TEXT,
                     trailer_gvwr_rating REAL,
                     time_gap_hours REAL,
-                    reused_solo_from_timestamp TEXT
+                    reused_solo_from_timestamp TEXT,
+                    ticket_timestamp TEXT,
+                    solo_timestamp TEXT
                 )
                 """
             )
@@ -321,8 +323,10 @@ class SqliteWeighEventStore:
                 "trailer_axle, gross, steer_rating, drive_rating, trailer_rating, "
                 "gvwr_rating, gcwr_rating, timestamp, combined_reweigh_reference, "
                 "solo_steer, solo_drive, solo_gross, solo_reweigh_reference, "
-                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
+                "ticket_timestamp, solo_timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?)",
                 (
                     record.truck_id,
                     record.trailer_id,
@@ -344,6 +348,8 @@ class SqliteWeighEventStore:
                     trailer_gvwr_rating,
                     record.time_gap_hours,
                     record.reused_solo_from_timestamp,
+                    record.ticket.timestamp,
+                    solo.timestamp if solo is not None else None,
                 ),
             )
 
@@ -354,7 +360,8 @@ class SqliteWeighEventStore:
                 "gross, steer_rating, drive_rating, trailer_rating, gvwr_rating, "
                 "gcwr_rating, timestamp, combined_reweigh_reference, solo_steer, "
                 "solo_drive, solo_gross, solo_reweigh_reference, "
-                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp "
+                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
+                "ticket_timestamp, solo_timestamp "
                 "FROM weigh_events ORDER BY id"
             ).fetchall()
         records = []
@@ -366,6 +373,7 @@ class SqliteWeighEventStore:
                     drive=row[15],
                     gross=row[16],
                     reweigh_reference=row[17],
+                    timestamp=row[22],
                 )
                 if solo_steer is not None
                 else None
@@ -389,6 +397,7 @@ class SqliteWeighEventStore:
                         trailer_axle=row[5],
                         gross=row[6],
                         reweigh_reference=row[13],
+                        timestamp=row[21],
                     ),
                     axle_result=AxleOverloadResult(
                         steer=AxleCheckResult(

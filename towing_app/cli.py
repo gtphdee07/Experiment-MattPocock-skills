@@ -19,10 +19,12 @@ from towing_app.calculations import (
     check_trailer_gvwr_overload,
 )
 from towing_app.field_acquisition import (
+    ClaudeVisionScaleTicketFieldSource,
     ClaudeVisionTrailerTagFieldSource,
     ClaudeVisionTruckTagFieldSource,
     FieldSource,
     FieldSourceUnavailableError,
+    TextFieldSource,
     WebAxleCountFieldSource,
 )
 from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
@@ -102,6 +104,13 @@ def _read_optional_float(read: ReadFn, prompt: str) -> float | None:
 def _read_optional_str(read: ReadFn, prompt: str) -> str | None:
     stripped = read(prompt).strip()
     return stripped if stripped else None
+
+
+def _read_optional_str_with_default(
+    read: ReadFn, prompt: str, current: str | None
+) -> str | None:
+    stripped = read(prompt).strip()
+    return stripped if stripped else current
 
 
 def _read_float_with_default(read: ReadFn, prompt: str, current: float) -> float:
@@ -235,6 +244,19 @@ def _resolve_optional_field(
             "or press Enter to skip."
         )
         return _read_optional_float(read, prompt)
+    return proposed
+
+
+def _resolve_optional_text_field(
+    read: ReadFn, field_source: TextFieldSource, field: str, prompt: str
+) -> str | None:
+    proposed = field_source.propose_text(field)
+    if proposed is None:
+        print(
+            f"Could not read {field} from the photo - enter it manually, "
+            "or press Enter to skip."
+        )
+        return _read_optional_str(read, prompt)
     return proposed
 
 
@@ -615,6 +637,204 @@ def collect_solo_ticket(read: ReadFn) -> SoloTicket | None:
     )
 
 
+def collect_combined_ticket_from_photo(
+    read: ReadFn, field_source: TextFieldSource
+) -> CombinedTicket | None:
+    """Proposes Steer/Drive/Trailer Axle/Gross Weight, timestamp, and
+    Reweigh Reference from a CAT Scale ticket photo via `field_source`.
+
+    Mirrors `collect_truck_profile_from_photo`'s propose-or-manual-per-field
+    shape (see that function's docstring): the four weights are required,
+    resolved through `_resolve_required_field` exactly as truck/trailer tag
+    fields are; timestamp and Reweigh Reference are optional free text,
+    resolved through `_resolve_optional_text_field` instead since they are
+    not numbers. Every value - proposed or manually typed because extraction
+    couldn't determine it - is confirmed through the same gate
+    `collect_combined_ticket` uses before anything is saved."""
+    try:
+        steer = _resolve_required_field(
+            read, field_source, "steer", "Steer Axle weight (lbs): "
+        )
+        drive = _resolve_required_field(
+            read, field_source, "drive", "Drive Axle weight (lbs): "
+        )
+        trailer_axle = _resolve_required_field(
+            read, field_source, "trailer_axle", "Trailer Axle weight (lbs): "
+        )
+        gross = _resolve_required_field(
+            read, field_source, "gross", "Gross Weight (lbs): "
+        )
+        timestamp = _resolve_optional_text_field(
+            read,
+            field_source,
+            "timestamp",
+            "Ticket date/time, if any (optional, press Enter to skip): ",
+        )
+        reweigh_reference = _resolve_optional_text_field(
+            read,
+            field_source,
+            "reweigh_reference",
+            "Reweigh reference printed on the ticket, if any (optional, "
+            "press Enter to skip): ",
+        )
+    except FieldSourceUnavailableError:
+        # The service itself is unreachable, not just this one field - no
+        # point trying the remaining fields against it, and the message
+        # must not imply the photo was the problem (see ADR 0003).
+        print("Couldn't reach the extraction service - enter all values manually.")
+        steer = _read_float(read, "Steer Axle weight (lbs): ")
+        drive = _read_float(read, "Drive Axle weight (lbs): ")
+        trailer_axle = _read_float(read, "Trailer Axle weight (lbs): ")
+        gross = _read_float(read, "Gross Weight (lbs): ")
+        timestamp = _read_optional_str(
+            read, "Ticket date/time, if any (optional, press Enter to skip): "
+        )
+        reweigh_reference = _read_optional_str(
+            read,
+            "Reweigh reference printed on the ticket, if any (optional, "
+            "press Enter to skip): ",
+        )
+
+    confirmed = _confirm(
+        read,
+        f"Steer: {steer} lbs, Drive: {drive} lbs, Trailer Axle: {trailer_axle} lbs, "
+        f"Gross: {gross} lbs. Save this Combined Ticket? [y/N]: ",
+    )
+    if not confirmed:
+        return None
+
+    return CombinedTicket(
+        steer=steer,
+        drive=drive,
+        trailer_axle=trailer_axle,
+        gross=gross,
+        timestamp=timestamp,
+        reweigh_reference=reweigh_reference,
+    )
+
+
+def collect_solo_ticket_from_photo(
+    read: ReadFn, field_source: TextFieldSource
+) -> SoloTicket | None:
+    """Proposes Steer/Drive Axle/Gross Weight, timestamp, and Reweigh
+    Reference from a CAT Scale ticket photo via `field_source` - mirrors
+    `collect_combined_ticket_from_photo`, minus Trailer Axle.
+
+    A Solo Ticket has no Trailer Axle field at all (see CONTEXT.md: Solo
+    Ticket, `SoloTicket`) - unlike a Combined Ticket's Trailer Axle, which
+    falls back to manual entry when unreadable (a content failure, still a
+    real field the ticket has), Trailer Axle is never proposed here in the
+    first place, because there is nowhere on `SoloTicket` to put a value
+    even if one came back."""
+    try:
+        steer = _resolve_required_field(
+            read, field_source, "steer", "Steer Axle weight (lbs): "
+        )
+        drive = _resolve_required_field(
+            read, field_source, "drive", "Drive Axle weight (lbs): "
+        )
+        gross = _resolve_required_field(
+            read, field_source, "gross", "Gross Weight (lbs): "
+        )
+        timestamp = _resolve_optional_text_field(
+            read,
+            field_source,
+            "timestamp",
+            "Ticket date/time, if any (optional, press Enter to skip): ",
+        )
+        reweigh_reference = _resolve_optional_text_field(
+            read,
+            field_source,
+            "reweigh_reference",
+            "Reweigh reference printed on the ticket, if any (optional, "
+            "press Enter to skip): ",
+        )
+    except FieldSourceUnavailableError:
+        print("Couldn't reach the extraction service - enter all values manually.")
+        steer = _read_float(read, "Steer Axle weight (lbs): ")
+        drive = _read_float(read, "Drive Axle weight (lbs): ")
+        gross = _read_float(read, "Gross Weight (lbs): ")
+        timestamp = _read_optional_str(
+            read, "Ticket date/time, if any (optional, press Enter to skip): "
+        )
+        reweigh_reference = _read_optional_str(
+            read,
+            "Reweigh reference printed on the ticket, if any (optional, "
+            "press Enter to skip): ",
+        )
+
+    confirmed = _confirm(
+        read,
+        f"Steer: {steer} lbs, Drive: {drive} lbs, Gross: {gross} lbs. "
+        "Save this Solo Ticket? [y/N]: ",
+    )
+    if not confirmed:
+        return None
+
+    return SoloTicket(
+        steer=steer,
+        drive=drive,
+        gross=gross,
+        timestamp=timestamp,
+        reweigh_reference=reweigh_reference,
+    )
+
+
+TicketEntryMode = Literal["photo", "manual"]
+
+
+def _ask_ticket_entry_mode(read: ReadFn, ticket_label: str) -> TicketEntryMode:
+    """Ask whether to enter a ticket via photo or by typing it in - offered
+    at the point each ticket (Combined or Solo) is collected mid-flow, since
+    Weigh Events have no top-level 'add' subcommand of their own to hang a
+    `--photo` CLI flag on the way Truck/Trailer Profiles do (see
+    `run_truck_add`/`run_trailer_add`). Manual is the default on any
+    response other than "p", matching `_ask_solo_ticket_choice`'s style."""
+    response = (
+        read(f"Enter the {ticket_label} via photo or manually? [p]hoto / [M]anual: ")
+        .strip()
+        .lower()
+    )
+    return "photo" if response == "p" else "manual"
+
+
+def _read_photo_path(read: ReadFn, prompt: str) -> Path:
+    return Path(read(prompt))
+
+
+def collect_combined_ticket_interactive(
+    read: ReadFn,
+    field_source_factory: Callable[
+        [Path], TextFieldSource
+    ] = ClaudeVisionScaleTicketFieldSource,
+) -> CombinedTicket | None:
+    """Offers a photo path alongside manual entry for the Combined Ticket,
+    per issue #10's acceptance criteria - see `_ask_ticket_entry_mode` for
+    why this is asked here rather than via a CLI flag."""
+    mode = _ask_ticket_entry_mode(read, "Combined Ticket")
+    if mode == "manual":
+        return collect_combined_ticket(read)
+    photo_path = _read_photo_path(read, "Path to the Combined Ticket photo: ")
+    return collect_combined_ticket_from_photo(read, field_source_factory(photo_path))
+
+
+def collect_solo_ticket_interactive(
+    read: ReadFn,
+    field_source_factory: Callable[
+        [Path], TextFieldSource
+    ] = ClaudeVisionScaleTicketFieldSource,
+) -> SoloTicket | None:
+    """Offers a photo path alongside manual entry for a freshly-weighed Solo
+    Ticket - mirrors `collect_combined_ticket_interactive`. Not used for the
+    "reuse last known weight" path (`_collect_reused_solo_ticket`), which
+    has no ticket to collect at all."""
+    mode = _ask_ticket_entry_mode(read, "Solo Ticket")
+    if mode == "manual":
+        return collect_solo_ticket(read)
+    photo_path = _read_photo_path(read, "Path to the Solo Ticket photo: ")
+    return collect_solo_ticket_from_photo(read, field_source_factory(photo_path))
+
+
 def determine_solo_link(
     read: ReadFn, combined: CombinedTicket, solo: SoloTicket
 ) -> bool:
@@ -968,18 +1188,23 @@ def _collect_linked_solo_ticket(
     ticket: CombinedTicket,
     past_records: Sequence[WeighEventRecord],
     truck_id: int,
+    field_source_factory: Callable[
+        [Path], TextFieldSource
+    ] = ClaudeVisionScaleTicketFieldSource,
 ) -> tuple[CombinedTicket, SoloTicket | None, TimeGapWarningResult | None, str | None]:
     """Decide how (or whether) this Weigh Event gets a Solo Ticket: weigh it
     now, reuse the last known weight for this Truck Profile, or skip
     entirely (see CONTEXT.md: Solo Ticket, Reused Solo Weight).
 
-    Returns the possibly-updated Combined Ticket (its `reweigh_reference`
-    is only ever collected here, not in `collect_combined_ticket`, since
-    it's only relevant when a fresh Solo Ticket might link to it), the
-    resulting Solo Ticket (`None` if skipped, declined, or not linked), a
-    Time-Gap Warning result (only for a freshly-linked pair - reusing a
-    weight never produces one, see ADR 0006), and the original timestamp a
-    reused weight came from (`None` unless reuse was actually used)."""
+    Returns the possibly-updated Combined Ticket (its `reweigh_reference` is
+    asked about here, not in `collect_combined_ticket`, only when it wasn't
+    already proposed from a Combined Ticket photo - see the
+    `_read_optional_str_with_default` call below - since it's otherwise only
+    relevant when a fresh Solo Ticket might link to it), the resulting Solo
+    Ticket (`None` if skipped, declined, or not linked), a Time-Gap Warning
+    result (only for a freshly-linked pair - reusing a weight never produces
+    one, see ADR 0006), and the original timestamp a reused weight came from
+    (`None` unless reuse was actually used)."""
     last_solo_record = _find_last_solo_ticket_record(past_records, truck_id)
     choice = _ask_solo_ticket_choice(read, reuse_available=last_solo_record is not None)
 
@@ -993,14 +1218,22 @@ def _collect_linked_solo_ticket(
         )
         return ticket, solo, None, reused_from_timestamp
 
-    combined_ref = _read_optional_str(
+    # A photo-based Combined Ticket may already carry a Reweigh Reference
+    # OCR'd straight off the ticket (see `collect_combined_ticket_from_photo`)
+    # - pressing Enter here keeps that value rather than blanking it out, so
+    # asking again mid-flow never silently discards an already-confirmed
+    # value (see ADR 0007). For a manually-entered ticket, `ticket
+    # .reweigh_reference` is still `None` at this point, so blank input
+    # behaves exactly as before.
+    combined_ref = _read_optional_str_with_default(
         read,
         "Reweigh reference printed on the Combined Ticket, if any (optional, "
-        "press Enter to skip): ",
+        "press Enter to skip/keep): ",
+        ticket.reweigh_reference,
     )
     ticket = replace(ticket, reweigh_reference=combined_ref)
 
-    fresh_solo = collect_solo_ticket(read)
+    fresh_solo = collect_solo_ticket_interactive(read, field_source_factory)
     if fresh_solo is None:
         print("Discarded - Solo Ticket not recorded.")
         return ticket, None, None, None
@@ -1027,11 +1260,16 @@ def run_weigh_event(
     weigh_event_store: WeighEventStore,
     read: ReadFn,
     now: Callable[[], str] = _iso_now,
+    field_source_factory: Callable[
+        [Path], TextFieldSource
+    ] = ClaudeVisionScaleTicketFieldSource,
 ) -> None:
-    """Pick a saved Truck Profile + Trailer Profile pairing, type in a
-    Combined Ticket, report Axle Overload + Hitched GVWR Overload + GCWR
-    Overload (reported as "not evaluated" when the Truck Profile has no
-    GCWR on file), and persist the completed Weigh Event to History."""
+    """Pick a saved Truck Profile + Trailer Profile pairing, collect a
+    Combined Ticket (by photo or manual entry - see
+    `collect_combined_ticket_interactive`), report Axle Overload + Hitched
+    GVWR Overload + GCWR Overload (reported as "not evaluated" when the
+    Truck Profile has no GCWR on file), and persist the completed Weigh
+    Event to History."""
     trucks = truck_store.list()
     if not trucks:
         print("No Truck Profiles saved yet. Add one with 'truck add' first.")
@@ -1051,14 +1289,16 @@ def run_weigh_event(
     assert truck.id is not None
     assert trailer.id is not None
 
-    ticket = collect_combined_ticket(read)
+    ticket = collect_combined_ticket_interactive(read, field_source_factory)
     if ticket is None:
         print("Discarded - Combined Ticket not recorded.")
         return
 
     past_records = weigh_event_store.list()
     ticket, solo_ticket, time_gap_result, reused_solo_from_timestamp = (
-        _collect_linked_solo_ticket(read, ticket, past_records, truck.id)
+        _collect_linked_solo_ticket(
+            read, ticket, past_records, truck.id, field_source_factory
+        )
     )
 
     axle_result = check_axle_overload(truck, trailer, ticket)

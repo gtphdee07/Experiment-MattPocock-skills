@@ -42,7 +42,10 @@ A past Weigh Event's Solo Ticket Gross Weight, carried forward in place of weigh
 The Trailer's actual weight, computed by subtracting a Solo Ticket's Gross Weight from its paired Combined Ticket's Gross Weight.
 
 **Reweigh Reference**:
-A field CAT Scale itself prints on a ticket, connecting a reweigh to the original ticket it belongs with. When a Combined Ticket and a Solo Ticket carry the same (non-blank) Reweigh Reference, they're linked automatically as one Weigh Event's pair; otherwise the user is asked to manually confirm the link (see ADR 0005). Entered manually today, same as every other ticket field — there's no OCR for CAT Scale Tickets yet (see #10).
+A field CAT Scale itself prints on a ticket, connecting a reweigh to the original ticket it belongs with. When a Combined Ticket and a Solo Ticket carry the same (non-blank) Reweigh Reference, they're linked automatically as one Weigh Event's pair; otherwise the user is asked to manually confirm the link (see ADR 0005). Entered manually, or read via the Claude-vision ticket adapter from a photo (see ADR 0007) — same confirm-or-edit step either way.
+
+**Ticket Timestamp**:
+A CAT Scale Ticket's own printed date/time, captured as free-form text when a Combined or Solo Ticket is entered via photo (see ADR 0007) — `None` for manual entry, which has no source for it. Distinct from a Weigh Event's own timestamp (when the record was saved) and from the Time-Gap Warning's elapsed-hours entry, which it does not currently feed (see ADR 0005, ADR 0007).
 
 **Garage**:
 The user's saved collection of Truck Profiles and Trailer Profiles, mixed and matched per Weigh Event.

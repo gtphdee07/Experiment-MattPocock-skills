@@ -5,6 +5,7 @@ import httpx2
 import pytest
 
 from towing_app.field_acquisition import (
+    ClaudeVisionScaleTicketFieldSource,
     ClaudeVisionTrailerTagFieldSource,
     ClaudeVisionTruckTagFieldSource,
     FieldSourceUnavailableError,
@@ -334,5 +335,156 @@ def test_propose_calls_vision_completion_only_once_across_multiple_fields(
     source.propose("gvwr")
     source.propose("front_gawr")
     source.propose("rear_gawr")
+
+    assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# ClaudeVisionScaleTicketFieldSource
+# ---------------------------------------------------------------------------
+
+
+def test_scale_ticket_propose_returns_extracted_numeric_values(tmp_path: Path) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        return (
+            '{"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400, '
+            '"timestamp": "7-12-26 10:10", "reweigh_reference": "1327426192434"}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose("steer") == 5640
+    assert source.propose("drive") == 9080
+    assert source.propose("trailer_axle") == 19680
+    assert source.propose("gross") == 34400
+
+
+def test_scale_ticket_propose_text_returns_extracted_text_values(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        return (
+            '{"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400, '
+            '"timestamp": "7-12-26 10:10", "reweigh_reference": "1327426192434"}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose_text("timestamp") == "7-12-26 10:10"
+    assert source.propose_text("reweigh_reference") == "1327426192434"
+
+
+def test_scale_ticket_propose_text_returns_none_when_field_not_printed(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        return (
+            '{"steer": 5560, "drive": 4420, "trailer_axle": 0, "gross": 9980, '
+            '"timestamp": "7-11-26 15:50", "reweigh_reference": null}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose_text("reweigh_reference") is None
+
+
+def test_scale_ticket_propose_returns_none_for_field_missing_from_extraction(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        return (
+            '{"steer": 5640, "drive": 9080, "trailer_axle": null, "gross": 34400, '
+            '"timestamp": null, "reweigh_reference": null}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose("trailer_axle") is None
+    assert source.propose_text("timestamp") is None
+
+
+def test_scale_ticket_propose_returns_none_when_extraction_is_not_valid_json(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        return "I could not read this ticket clearly."
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose("steer") is None
+    assert source.propose_text("timestamp") is None
+
+
+def test_scale_ticket_propose_raises_service_unavailable_when_the_api_call_fails(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    def failing_vision_completion(image_b64: str, media_type: str) -> str:
+        raise anthropic.APIConnectionError(request=request)
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, failing_vision_completion)
+
+    with pytest.raises(FieldSourceUnavailableError):
+        source.propose("steer")
+
+
+def test_scale_ticket_propose_raises_service_unavailable_when_api_key_is_missing(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def missing_key_vision_completion(image_b64: str, media_type: str) -> str:
+        raise TypeError(
+            "Could not resolve authentication method. Expected one of "
+            "api_key, auth_token, or credentials to be set."
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(
+        photo_path, missing_key_vision_completion
+    )
+
+    with pytest.raises(FieldSourceUnavailableError):
+        source.propose_text("timestamp")
+
+
+def test_scale_ticket_propose_calls_vision_completion_only_once_across_fields(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+    call_count = 0
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        nonlocal call_count
+        call_count += 1
+        return (
+            '{"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400, '
+            '"timestamp": "7-12-26 10:10", "reweigh_reference": "1327426192434"}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+    source.propose("steer")
+    source.propose("drive")
+    source.propose_text("timestamp")
+    source.propose_text("reweigh_reference")
 
     assert call_count == 1

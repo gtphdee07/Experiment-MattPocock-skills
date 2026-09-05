@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from towing_app.calculations import (
@@ -10,13 +12,18 @@ from towing_app.calculations import (
 from towing_app.cli import (
     LEGAL_DISCLAIMER,
     collect_combined_ticket,
+    collect_combined_ticket_from_photo,
+    collect_combined_ticket_interactive,
     collect_solo_ticket,
+    collect_solo_ticket_from_photo,
+    collect_solo_ticket_interactive,
     determine_solo_link,
     format_weigh_event_results,
     run_weigh_event,
     run_weigh_event_history,
     select_profile,
 )
+from towing_app.field_acquisition import FieldSourceUnavailableError
 from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     InMemoryTrailerStore,
@@ -32,6 +39,36 @@ FIXED_TIMESTAMP = "2026-09-05T12:00:00+00:00"
 
 def _fixed_now() -> str:
     return FIXED_TIMESTAMP
+
+
+class _FakeTicketFieldSource:
+    """A canned field source standing in for CAT Scale ticket OCR in tests -
+    implements the `TextFieldSource` shape (numeric `propose` plus text
+    `propose_text`) that `ClaudeVisionScaleTicketFieldSource` provides."""
+
+    def __init__(
+        self,
+        numeric_values: dict[str, float | None],
+        text_values: dict[str, str | None] | None = None,
+    ) -> None:
+        self._numeric_values = numeric_values
+        self._text_values = text_values or {}
+
+    def propose(self, field: str) -> float | None:
+        return self._numeric_values.get(field)
+
+    def propose_text(self, field: str) -> str | None:
+        return self._text_values.get(field)
+
+
+class _UnavailableTicketFieldSource:
+    """Simulates the extraction service itself being unreachable."""
+
+    def propose(self, field: str) -> float | None:
+        raise FieldSourceUnavailableError("simulated outage")
+
+    def propose_text(self, field: str) -> str | None:
+        raise FieldSourceUnavailableError("simulated outage")
 
 
 # --- collect_combined_ticket ------------------------------------------------
@@ -138,6 +175,215 @@ def test_collect_solo_ticket_reprompts_on_invalid_number() -> None:
     result = collect_solo_ticket(read)
 
     assert result == SoloTicket(steer=5000, drive=9720, gross=14720)
+
+
+# --- collect_combined_ticket_from_photo (#10) --------------------------------
+
+
+def test_collect_combined_ticket_from_photo_uses_proposed_values() -> None:
+    field_source = _FakeTicketFieldSource(
+        {"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400},
+        {"timestamp": "7-12-26 10:10", "reweigh_reference": "1327426192434"},
+    )
+    responses = iter(["y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_combined_ticket_from_photo(read, field_source)
+
+    assert result == CombinedTicket(
+        steer=5640,
+        drive=9080,
+        trailer_axle=19680,
+        gross=34400,
+        timestamp="7-12-26 10:10",
+        reweigh_reference="1327426192434",
+    )
+
+
+def test_collect_combined_ticket_from_photo_returns_none_when_declined() -> None:
+    field_source = _FakeTicketFieldSource(
+        {"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400}
+    )
+    responses = iter(["", "", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_combined_ticket_from_photo(read, field_source)
+
+    assert result is None
+
+
+def test_collect_combined_ticket_from_photo_falls_back_when_field_missing() -> None:
+    # trailer_axle couldn't be read from the photo - the user must type it.
+    # timestamp/reweigh_reference are also unproposed here, each falling
+    # back to an (optional, left blank) manual prompt.
+    field_source = _FakeTicketFieldSource(
+        {"steer": 5640, "drive": 9080, "gross": 34400}
+    )
+    responses = iter(["19680", "", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_combined_ticket_from_photo(read, field_source)
+
+    assert result == CombinedTicket(
+        steer=5640, drive=9080, trailer_axle=19680, gross=34400
+    )
+
+
+def test_collect_combined_ticket_from_photo_falls_back_fully_on_service_outage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _UnavailableTicketFieldSource()
+    responses = iter(["5640", "9080", "19680", "34400", "", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_combined_ticket_from_photo(read, field_source)
+
+    assert result == CombinedTicket(
+        steer=5640, drive=9080, trailer_axle=19680, gross=34400
+    )
+    printed = capsys.readouterr().out.lower()
+    assert "service" in printed
+
+
+# --- collect_solo_ticket_from_photo (#10) -------------------------------------
+
+
+def test_collect_solo_ticket_from_photo_uses_proposed_values() -> None:
+    # reweigh_reference isn't proposed here, falling back to an (optional,
+    # left blank) manual prompt - same as a real Solo Ticket, which
+    # typically carries no Reweigh Reference of its own.
+    field_source = _FakeTicketFieldSource(
+        {"steer": 5560, "drive": 4420, "gross": 9980},
+        {"timestamp": "7-11-26 15:50"},
+    )
+    responses = iter(["", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket_from_photo(read, field_source)
+
+    assert result == SoloTicket(
+        steer=5560, drive=4420, gross=9980, timestamp="7-11-26 15:50"
+    )
+
+
+def test_collect_solo_ticket_from_photo_never_asks_for_trailer_axle() -> None:
+    """A Solo Ticket has no Trailer Axle field at all (see CONTEXT.md: Solo
+    Ticket) - the photo-based collector must never even ask the field source
+    to propose one, since SoloTicket has nowhere to put it."""
+
+    class _AssertsNoTrailerAxle:
+        def propose(self, field: str) -> float | None:
+            assert field != "trailer_axle"
+            return {"steer": 5560, "drive": 4420, "gross": 9980}.get(field)
+
+        def propose_text(self, field: str) -> str | None:
+            return None
+
+    responses = iter(["", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket_from_photo(read, _AssertsNoTrailerAxle())
+
+    assert result == SoloTicket(steer=5560, drive=4420, gross=9980)
+
+
+def test_collect_solo_ticket_from_photo_falls_back_fully_on_service_outage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _UnavailableTicketFieldSource()
+    responses = iter(["5560", "4420", "9980", "", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket_from_photo(read, field_source)
+
+    assert result == SoloTicket(steer=5560, drive=4420, gross=9980)
+    printed = capsys.readouterr().out.lower()
+    assert "service" in printed
+
+
+# --- collect_combined_ticket_interactive / collect_solo_ticket_interactive ---
+
+
+def test_collect_combined_ticket_interactive_manual_by_default() -> None:
+    responses = iter(["", "5640", "9080", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    def field_source_factory(photo_path: Path) -> _FakeTicketFieldSource:
+        raise AssertionError("should not build a field source for manual entry")
+
+    result = collect_combined_ticket_interactive(read, field_source_factory)
+
+    assert result == CombinedTicket(
+        steer=5640, drive=9080, trailer_axle=19680, gross=34400
+    )
+
+
+def test_collect_combined_ticket_interactive_uses_photo_when_chosen() -> None:
+    responses = iter(["p", "photo.jpg", "", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    field_source = _FakeTicketFieldSource(
+        {"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400}
+    )
+
+    def field_source_factory(photo_path: Path) -> _FakeTicketFieldSource:
+        assert photo_path == Path("photo.jpg")
+        return field_source
+
+    result = collect_combined_ticket_interactive(read, field_source_factory)
+
+    assert result == CombinedTicket(
+        steer=5640, drive=9080, trailer_axle=19680, gross=34400
+    )
+
+
+def test_collect_solo_ticket_interactive_manual_by_default() -> None:
+    responses = iter(["", "5560", "4420", "9980", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    def field_source_factory(photo_path: Path) -> _FakeTicketFieldSource:
+        raise AssertionError("should not build a field source for manual entry")
+
+    result = collect_solo_ticket_interactive(read, field_source_factory)
+
+    assert result == SoloTicket(steer=5560, drive=4420, gross=9980)
+
+
+def test_collect_solo_ticket_interactive_uses_photo_when_chosen() -> None:
+    responses = iter(["p", "photo.jpg", "", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    field_source = _FakeTicketFieldSource({"steer": 5560, "drive": 4420, "gross": 9980})
+
+    def field_source_factory(photo_path: Path) -> _FakeTicketFieldSource:
+        assert photo_path == Path("photo.jpg")
+        return field_source
+
+    result = collect_solo_ticket_interactive(read, field_source_factory)
+
+    assert result == SoloTicket(steer=5560, drive=4420, gross=9980)
 
 
 # --- determine_solo_link ------------------------------------------------------
@@ -263,7 +509,7 @@ def test_run_weigh_event_reports_worked_example_results(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -288,7 +534,7 @@ def test_run_weigh_event_declines_without_saving_or_crashing(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -348,7 +594,7 @@ def test_run_weigh_event_reports_gcwr_overload_and_labels_it_unverified(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -377,7 +623,7 @@ def test_run_weigh_event_reports_not_evaluated_when_no_gcwr_on_file(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -409,7 +655,7 @@ def test_run_weigh_event_saves_completed_event_to_history() -> None:
     [saved_trailer] = trailer_store.list()
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -444,7 +690,7 @@ def test_run_weigh_event_reports_trailer_gvwr_not_evaluated_without_solo_ticket(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -531,6 +777,7 @@ def test_run_weigh_event_links_solo_automatically_on_matching_reweigh_reference(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -538,6 +785,7 @@ def test_run_weigh_event_links_solo_automatically_on_matching_reweigh_reference(
             "y",  # Combined Ticket
             "y",  # add a Solo Ticket
             "R12345",  # Combined Ticket's reweigh reference
+            "",  # enter the Solo Ticket manually
             "5000",
             "9720",
             "14720",
@@ -582,6 +830,7 @@ def test_run_weigh_event_falls_back_to_manual_link_on_reference_mismatch(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -589,6 +838,7 @@ def test_run_weigh_event_falls_back_to_manual_link_on_reference_mismatch(
             "y",
             "y",  # add a Solo Ticket
             "R12345",  # Combined Ticket's reweigh reference
+            "",  # enter the Solo Ticket manually
             "5000",
             "9720",
             "14720",
@@ -629,6 +879,7 @@ def test_run_weigh_event_discards_solo_ticket_when_manual_link_declined(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -636,6 +887,7 @@ def test_run_weigh_event_discards_solo_ticket_when_manual_link_declined(
             "y",
             "y",  # add a Solo Ticket
             "",  # no Combined Ticket reweigh reference
+            "",  # enter the Solo Ticket manually
             "5000",
             "9720",
             "14720",
@@ -673,6 +925,7 @@ def test_run_weigh_event_no_time_gap_warning_within_threshold(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -680,6 +933,7 @@ def test_run_weigh_event_no_time_gap_warning_within_threshold(
             "y",
             "y",
             "R1",
+            "",  # enter the Solo Ticket manually
             "5000",
             "9720",
             "14720",
@@ -743,7 +997,7 @@ def test_run_weigh_event_reuse_not_offered_without_history(
     weigh_event_store = InMemoryWeighEventStore()
 
     prompts: list[str] = []
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         prompts.append(prompt)
@@ -768,7 +1022,7 @@ def test_run_weigh_event_reuse_not_offered_for_different_truck(
     _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id + 1000)
 
     prompts: list[str] = []
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         prompts.append(prompt)
@@ -793,7 +1047,7 @@ def test_run_weigh_event_three_way_prompt_offered_when_reuse_available(
     _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
 
     prompts: list[str] = []
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         prompts.append(prompt)
@@ -821,6 +1075,7 @@ def test_run_weigh_event_reuse_last_known_solo_weight_unchanged(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -879,7 +1134,7 @@ def test_run_weigh_event_reuse_picks_most_recent_solo_record(
         solo_ticket=older_solo,
     )
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "r", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "r", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -910,7 +1165,7 @@ def test_run_weigh_event_reuse_reports_change_falls_back_to_unchanged_for_now(
     weigh_event_store = InMemoryWeighEventStore()
     _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "r", "y"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "r", "y"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -941,6 +1196,7 @@ def test_run_weigh_event_weigh_now_unchanged_when_reuse_available(
         [
             "1",
             "1",
+            "",
             "5640",
             "9080",
             "19680",
@@ -948,6 +1204,7 @@ def test_run_weigh_event_weigh_now_unchanged_when_reuse_available(
             "y",  # Combined Ticket
             "y",  # weigh solo now, despite reuse being offered
             "R555",  # Combined Ticket's reweigh reference
+            "",  # enter the Solo Ticket manually
             "5100",
             "9600",
             "14700",
@@ -985,7 +1242,7 @@ def test_run_weigh_event_skip_unchanged_when_reuse_available(
     weigh_event_store = InMemoryWeighEventStore()
     _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
