@@ -47,6 +47,9 @@ MediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 # (image_b64, media_type) -> raw text response from the model.
 VisionCompletionFn = Callable[[str, MediaType], str]
 
+# (make, model) -> raw text response from the model.
+AxleCountLookupFn = Callable[[str, str], str]
+
 _MEDIA_TYPES: dict[str, MediaType] = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -66,12 +69,35 @@ _EXTRACTION_PROMPT = (
     "using null for any value you cannot read. No other text."
 )
 
+_TRAILER_TAG_FIELDS = ("gvwr", "gawr", "uvw")
+
+_TRAILER_EXTRACTION_PROMPT = (
+    "This is a photo of a travel trailer's or fifth-wheel's federal "
+    "certification label. Extract the GVWR, GAWR (the single per-axle "
+    "figure printed on the label, not multiplied by axle count), and UVW "
+    "(Unloaded Vehicle Weight), in POUNDS only - ignore the kg figures "
+    "printed alongside them. Respond with ONLY a JSON object of the form "
+    '{"gvwr": <number>, "gawr": <number>, "uvw": <number>}, using null for '
+    "any value you cannot read. No other text."
+)
+
+
+_AXLE_COUNT_FIELDS = ("axle_count",)
+
+_AXLE_COUNT_PROMPT_TEMPLATE = (
+    'Look up how many axles a "{make} {model}" travel trailer or '
+    "fifth-wheel RV has, using the manufacturer's published specifications. "
+    "Search the web if needed. Respond with ONLY a JSON object of the form "
+    '{{"axle_count": <integer>}}, using null if you cannot find a reliable '
+    "axle count for this make/model. No other text."
+)
+
 
 def _media_type_for(photo_path: Path) -> MediaType:
     return _MEDIA_TYPES.get(photo_path.suffix.lower(), "image/jpeg")
 
 
-def _default_vision_completion(image_b64: str, media_type: MediaType) -> str:
+def _vision_completion(image_b64: str, media_type: MediaType, prompt: str) -> str:
     """Calls Claude with vision input. Requires ANTHROPIC_API_KEY in the env.
 
     `anthropic.Anthropic()` resolves credentials from the environment
@@ -91,7 +117,7 @@ def _default_vision_completion(image_b64: str, media_type: MediaType) -> str:
                         "data": image_b64,
                     },
                 },
-                {"type": "text", "text": _EXTRACTION_PROMPT},
+                {"type": "text", "text": prompt},
             ],
         }
     ]
@@ -106,20 +132,61 @@ def _default_vision_completion(image_b64: str, media_type: MediaType) -> str:
     return ""
 
 
-def _parse_truck_tag_fields(raw_text: str) -> dict[str, float | None]:
+def _default_vision_completion(image_b64: str, media_type: MediaType) -> str:
+    return _vision_completion(image_b64, media_type, _EXTRACTION_PROMPT)
+
+
+def _default_trailer_vision_completion(image_b64: str, media_type: MediaType) -> str:
+    return _vision_completion(image_b64, media_type, _TRAILER_EXTRACTION_PROMPT)
+
+
+def _default_axle_count_lookup(make: str, model: str) -> str:
+    """Looks up Axle Count via a Claude web search. Requires
+    ANTHROPIC_API_KEY in the env - see `_vision_completion` for how
+    credentials are resolved; the same resolution applies here.
+    """
+    client = anthropic.Anthropic()
+    prompt = _AXLE_COUNT_PROMPT_TEMPLATE.format(make=make, model=model)
+    response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=1024,
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+        messages=[{"role": "user", "content": prompt}],
+    )
+    for block in reversed(response.content):
+        if block.type == "text":
+            return block.text
+    return ""
+
+
+def _parse_tag_fields(
+    raw_text: str, fields: tuple[str, ...]
+) -> dict[str, float | None]:
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError:
-        return dict.fromkeys(_TRUCK_TAG_FIELDS)
+        return dict.fromkeys(fields)
 
     if not isinstance(data, dict):
-        return dict.fromkeys(_TRUCK_TAG_FIELDS)
+        return dict.fromkeys(fields)
 
-    fields: dict[str, float | None] = {}
-    for field in _TRUCK_TAG_FIELDS:
+    parsed: dict[str, float | None] = {}
+    for field in fields:
         value = data.get(field)
-        fields[field] = float(value) if isinstance(value, int | float) else None
-    return fields
+        parsed[field] = float(value) if isinstance(value, int | float) else None
+    return parsed
+
+
+def _parse_truck_tag_fields(raw_text: str) -> dict[str, float | None]:
+    return _parse_tag_fields(raw_text, _TRUCK_TAG_FIELDS)
+
+
+def _parse_trailer_tag_fields(raw_text: str) -> dict[str, float | None]:
+    return _parse_tag_fields(raw_text, _TRAILER_TAG_FIELDS)
+
+
+def _parse_axle_count_fields(raw_text: str) -> dict[str, float | None]:
+    return _parse_tag_fields(raw_text, _AXLE_COUNT_FIELDS)
 
 
 class ClaudeVisionTruckTagFieldSource:
@@ -168,3 +235,86 @@ class ClaudeVisionTruckTagFieldSource:
             logger.exception("Claude vision extraction failed for %s", self._photo_path)
             raise FieldSourceUnavailableError(str(exc)) from exc
         return _parse_truck_tag_fields(raw_text)
+
+
+class ClaudeVisionTrailerTagFieldSource:
+    """Extracts GVWR, GAWR (per axle), and UVW from a trailer tag photo.
+
+    Mirrors `ClaudeVisionTruckTagFieldSource` - see that class's docstring
+    for the injection/caching rationale, which applies identically here.
+    """
+
+    def __init__(
+        self,
+        photo_path: Path,
+        vision_completion: VisionCompletionFn = _default_trailer_vision_completion,
+    ) -> None:
+        self._photo_path = photo_path
+        self._vision_completion = vision_completion
+        self._fields: dict[str, float | None] | None = None
+
+    def propose(self, field: str) -> float | None:
+        if self._fields is None:
+            self._fields = self._extract()
+        return self._fields.get(field)
+
+    def _extract(self) -> dict[str, float | None]:
+        image_bytes = self._photo_path.read_bytes()
+        image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+        media_type = _media_type_for(self._photo_path)
+        try:
+            raw_text = self._vision_completion(image_b64, media_type)
+        except (anthropic.APIError, TypeError) as exc:
+            # See ClaudeVisionTruckTagFieldSource._extract for why both
+            # anthropic.APIError and a bare TypeError are treated as
+            # service-level failures (raised) rather than content misses
+            # (folded into the all-None return below).
+            logger.exception("Claude vision extraction failed for %s", self._photo_path)
+            raise FieldSourceUnavailableError(str(exc)) from exc
+        return _parse_trailer_tag_fields(raw_text)
+
+
+class WebAxleCountFieldSource:
+    """Proposes a Trailer's Axle Count, looked up by make/model.
+
+    Unlike the tag photo adapters, there is only one field ("axle_count")
+    this source can ever propose, but it still implements the same
+    `FieldSource` shape (see module docstring) so callers and the
+    confirm-or-edit step treat every source uniformly.
+
+    The lookup call is injected as `lookup` (default: a real Claude
+    web-search call) so tests can supply a fake that returns canned lookup
+    text without making a network call. It runs at most once, on the first
+    `propose()` call; the result is cached for subsequent calls.
+    """
+
+    def __init__(
+        self,
+        make: str,
+        model: str,
+        lookup: AxleCountLookupFn = _default_axle_count_lookup,
+    ) -> None:
+        self._make = make
+        self._model = model
+        self._lookup = lookup
+        self._fields: dict[str, float | None] | None = None
+
+    def propose(self, field: str) -> float | None:
+        if self._fields is None:
+            self._fields = self._extract()
+        return self._fields.get(field)
+
+    def _extract(self) -> dict[str, float | None]:
+        try:
+            raw_text = self._lookup(self._make, self._model)
+        except (anthropic.APIError, TypeError) as exc:
+            # See ClaudeVisionTruckTagFieldSource._extract for why both
+            # anthropic.APIError and a bare TypeError are treated as
+            # service-level failures (raised) rather than a content miss
+            # (folded into the all-None return below) - per ADR 0003, any
+            # future external dependency follows this same split.
+            logger.exception(
+                "Axle-count lookup failed for %s %s", self._make, self._model
+            )
+            raise FieldSourceUnavailableError(str(exc)) from exc
+        return _parse_axle_count_fields(raw_text)

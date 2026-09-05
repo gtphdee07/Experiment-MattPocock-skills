@@ -1,12 +1,35 @@
+from pathlib import Path
+
+import pytest
+
 from towing_app.cli import (
     collect_trailer_profile,
     collect_trailer_profile_edit,
+    collect_trailer_profile_from_photo,
     run_trailer_add,
     run_trailer_delete,
     run_trailer_edit,
 )
+from towing_app.field_acquisition import FieldSourceUnavailableError
 from towing_app.models import TrailerProfile
 from towing_app.storage import InMemoryTrailerStore
+
+
+class _FakeFieldSource:
+    """A canned field source standing in for OCR extraction in tests."""
+
+    def __init__(self, values: dict[str, float | None]) -> None:
+        self._values = values
+
+    def propose(self, field: str) -> float | None:
+        return self._values.get(field)
+
+
+class _UnavailableFieldSource:
+    """Simulates the extraction/lookup service itself being unreachable."""
+
+    def propose(self, field: str) -> float | None:
+        raise FieldSourceUnavailableError("simulated outage")
 
 
 def test_collect_trailer_profile_returns_profile_when_confirmed() -> None:
@@ -265,3 +288,135 @@ def test_run_trailer_delete_with_no_profiles_does_not_prompt() -> None:
     run_trailer_delete(store, read)
 
     assert store.list() == []
+
+
+# ---------------------------------------------------------------------------
+# collect_trailer_profile_from_photo
+# ---------------------------------------------------------------------------
+
+
+def test_collect_trailer_profile_from_photo_uses_proposed_values() -> None:
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000, "uvw": 20554})
+    axle_count_source = _FakeFieldSource({"axle_count": 3})
+    responses = iter(["Grand Design", "Reflection 315RLTS", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result == TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+
+
+def test_collect_trailer_profile_from_photo_returns_none_when_declined() -> None:
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000, "uvw": 20554})
+    axle_count_source = _FakeFieldSource({"axle_count": 3})
+    responses = iter(["Grand Design", "Reflection 315RLTS", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result is None
+
+
+def test_collect_trailer_profile_from_photo_falls_back_when_tag_field_missing() -> None:
+    # uvw couldn't be read from the photo - the user must type it (or skip).
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000})
+    axle_count_source = _FakeFieldSource({"axle_count": 3})
+    responses = iter(["20554", "Grand Design", "Reflection 315RLTS", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result == TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+
+
+def test_collect_trailer_profile_from_photo_falls_back_fully_on_vision_service_outage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _UnavailableFieldSource()
+    axle_count_source = _FakeFieldSource({"axle_count": 3})
+    responses = iter(
+        ["23500", "8000", "20554", "Grand Design", "Reflection 315RLTS", "y"]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result == TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+    printed = capsys.readouterr().out.lower()
+    assert "service" in printed
+    assert "photo" not in printed
+
+
+def test_collect_trailer_profile_from_photo_falls_back_when_lookup_finds_no_match(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000, "uvw": 20554})
+    axle_count_source = _FakeFieldSource({})  # no axle_count -> propose returns None
+    responses = iter(["Unknown Co", "Mystery Model", "3", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result == TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+    printed = capsys.readouterr().out.lower()
+    assert "manually" in printed
+
+
+def test_collect_trailer_profile_from_photo_falls_back_on_lookup_service_outage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000, "uvw": 20554})
+    axle_count_source = _UnavailableFieldSource()
+    responses = iter(["Grand Design", "Reflection 315RLTS", "3", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_trailer_profile_from_photo(
+        read, field_source, lambda make, model: axle_count_source
+    )
+
+    assert result == TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+    printed = capsys.readouterr().out.lower()
+    assert "service" in printed
+
+
+def test_run_trailer_add_with_photo_saves_using_field_source_and_lookup() -> None:
+    store = InMemoryTrailerStore()
+    field_source = _FakeFieldSource({"gvwr": 23500, "gawr": 8000, "uvw": 20554})
+    axle_count_source = _FakeFieldSource({"axle_count": 3})
+    responses = iter(["Grand Design", "Reflection 315RLTS", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_trailer_add(
+        store,
+        read,
+        photo_path=Path("tag.jpg"),
+        field_source_factory=lambda _photo_path: field_source,
+        axle_count_source_factory=lambda make, model: axle_count_source,
+    )
+
+    expected = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+    assert store.list() == [expected]
