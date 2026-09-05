@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from towing_app.cli import (
     DEFAULT_DB_PATH,
     collect_truck_profile,
@@ -7,6 +9,7 @@ from towing_app.cli import (
     resolve_db_path,
     run_truck_add,
 )
+from towing_app.field_acquisition import FieldSourceUnavailableError
 from towing_app.models import TruckProfile
 from towing_app.storage import InMemoryTruckStore
 
@@ -19,6 +22,13 @@ class _FakeFieldSource:
 
     def propose(self, field: str) -> float | None:
         return self._values.get(field)
+
+
+class _UnavailableFieldSource:
+    """Simulates the extraction service itself being unreachable."""
+
+    def propose(self, field: str) -> float | None:
+        raise FieldSourceUnavailableError("simulated outage")
 
 
 def test_collect_truck_profile_returns_profile_when_confirmed() -> None:
@@ -179,6 +189,29 @@ def test_collect_truck_profile_from_photo_falls_back_to_manual_entry_when_missin
     assert result == TruckProfile(
         gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500
     )
+
+
+def test_collect_truck_profile_from_photo_falls_back_fully_on_service_outage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    field_source = _UnavailableFieldSource()
+    responses = iter(["14000", "6000", "9900", "32500", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_truck_profile_from_photo(read, field_source)
+
+    assert result == TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500
+    )
+    # A field-source outage is a different message than "this one field was
+    # unreadable" - the user shouldn't be told to blame their photo, and it
+    # should print once, not once per field.
+    printed = capsys.readouterr().out.lower()
+    assert "service" in printed
+    assert "photo" not in printed
+    assert printed.count("enter") <= 1 or printed.count("manually") == 1
 
 
 def test_run_truck_add_with_photo_saves_using_field_source() -> None:

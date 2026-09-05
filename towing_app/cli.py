@@ -3,7 +3,11 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from towing_app.field_acquisition import ClaudeVisionTruckTagFieldSource, FieldSource
+from towing_app.field_acquisition import (
+    ClaudeVisionTruckTagFieldSource,
+    FieldSource,
+    FieldSourceUnavailableError,
+)
 from towing_app.models import TrailerProfile, TruckProfile
 from towing_app.storage import (
     SqliteTrailerStore,
@@ -102,13 +106,22 @@ def collect_truck_profile_from_photo(
     because extraction couldn't determine it - is confirmed through the same
     `_confirm_truck_profile` gate manual entry uses.
     """
-    gvwr = _resolve_truck_field(read, field_source, "gvwr", "GVWR (lbs): ")
-    front_gawr = _resolve_truck_field(
-        read, field_source, "front_gawr", "Front GAWR (lbs): "
-    )
-    rear_gawr = _resolve_truck_field(
-        read, field_source, "rear_gawr", "Rear GAWR (lbs): "
-    )
+    try:
+        gvwr = _resolve_truck_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        front_gawr = _resolve_truck_field(
+            read, field_source, "front_gawr", "Front GAWR (lbs): "
+        )
+        rear_gawr = _resolve_truck_field(
+            read, field_source, "rear_gawr", "Rear GAWR (lbs): "
+        )
+    except FieldSourceUnavailableError:
+        # The service itself is unreachable, not just this one field - no
+        # point trying the remaining fields against it, and the message
+        # must not imply the photo was the problem (see ADR 0003).
+        print("Couldn't reach the extraction service - enter all values manually.")
+        gvwr = _read_float(read, "GVWR (lbs): ")
+        front_gawr = _read_float(read, "Front GAWR (lbs): ")
+        rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
     gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
     return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
 

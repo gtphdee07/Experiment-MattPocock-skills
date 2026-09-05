@@ -21,8 +21,23 @@ from anthropic.types import MessageParam
 logger = logging.getLogger(__name__)
 
 
+class FieldSourceUnavailableError(Exception):
+    """The source itself couldn't be reached or authenticated - not a content
+    problem with what it returned. Distinct from returning None, which means
+    the source was reached and responded, but couldn't determine this
+    particular value (e.g. an unreadable field on an otherwise-fine photo).
+    Callers should degrade differently for each: None means "ask the user to
+    fill in just this field"; this exception means "the whole source is
+    unavailable right now, fall back to manual entry entirely."
+    """
+
+
 class FieldSource(Protocol):
-    """Proposes a value for a named field, or None if it can't determine one."""
+    """Proposes a value for a named field, or None if it can't determine one.
+
+    May raise FieldSourceUnavailableError if the source itself is unreachable
+    (see that class's docstring for how this differs from returning None).
+    """
 
     def propose(self, field: str) -> float | None: ...
 
@@ -137,7 +152,19 @@ class ClaudeVisionTruckTagFieldSource:
         media_type = _media_type_for(self._photo_path)
         try:
             raw_text = self._vision_completion(image_b64, media_type)
-        except anthropic.APIError:
+        except (anthropic.APIError, TypeError) as exc:
+            # anthropic.APIError covers network/auth/rate-limit failures once
+            # a request is actually attempted. A missing API key is different:
+            # the SDK raises a bare TypeError from client.messages.create()
+            # before any request goes out ("Could not resolve authentication
+            # method..."), not an anthropic.* exception, so it must be caught
+            # here too or a missing key crashes the CLI with a raw traceback.
+            #
+            # Either way this is a *service*-level failure, not a content
+            # one - the model never got a chance to read anything - so it's
+            # raised rather than folded into the all-None return below,
+            # letting the caller tell "couldn't reach the service" apart
+            # from "reached it, but couldn't read this specific field."
             logger.exception("Claude vision extraction failed for %s", self._photo_path)
-            return dict.fromkeys(_TRUCK_TAG_FIELDS)
+            raise FieldSourceUnavailableError(str(exc)) from exc
         return _parse_truck_tag_fields(raw_text)
