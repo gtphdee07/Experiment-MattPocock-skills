@@ -35,6 +35,9 @@ The CAT Scale Ticket for a Weigh Event where the Tow Vehicle and Trailer were we
 **Solo Ticket**:
 The CAT Scale Ticket for a Weigh Event where the Tow Vehicle was weighed alone, used to derive Derived Trailer Weight.
 
+**Reused Solo Weight**:
+A past Weigh Event's Solo Ticket Gross Weight, carried forward in place of weighing solo again today — since a Tow Vehicle's own weight rarely changes much between visits. Shown with the date it was recorded. The user may adjust it for a known change since then (extra cargo, fuel, passengers); an adjusted figure is an Unverified Value (see ADR 0006). An unchanged Reused Solo Weight is not.
+
 **Derived Trailer Weight**:
 The Trailer's actual weight, computed by subtracting a Solo Ticket's Gross Weight from its paired Combined Ticket's Gross Weight.
 
@@ -61,11 +64,11 @@ The Tow Vehicle's own axle groups, summed while hitched to the Trailer, exceed t
 The combined actual weight of Tow Vehicle and Trailer exceeds the Tow Vehicle's GCWR. Not evaluated when the Truck Profile has no GCWR on file.
 
 **Trailer GVWR Overload**:
-Derived Trailer Weight exceeds the Trailer Profile's GVWR. Not evaluated when there's no linked Solo Ticket for the Weigh Event.
+Derived Trailer Weight exceeds the Trailer Profile's GVWR. Not evaluated when there's neither a linked Solo Ticket nor a Reused Solo Weight for the Weigh Event. Flagged as close to the limit on a narrow under-the-limit margin — never softened when actually over it; see ADR 0006 for the exact margins and why they differ for an Unverified Value.
 
 **Time-Gap Warning**:
 A non-blocking, advisory warning shown when a linked Combined+Solo Ticket pair's two physical weighings are more than a configurable threshold apart (default ~4 hours) — the Trailer may have changed weight (fuel, cargo, hitching/unhitching) in between, making Derived Trailer Weight less reliable. Never blocks or invalidates a Weigh Event, unlike the Overload checks.
 
 **Unverified Value**:
-A number entered manually with no photo or CAT Scale Ticket backing it — most commonly GCWR. Any check depending on one is labeled distinctly in output from checks backed by an OCR'd tag or Ticket.
+A number entered manually with no photo or CAT Scale Ticket backing it — most commonly GCWR, or a Reused Solo Weight the user has adjusted. Any check depending on one is labeled distinctly in output from checks backed by an OCR'd tag or Ticket.
 _Avoid_: manual value, self-reported value.
