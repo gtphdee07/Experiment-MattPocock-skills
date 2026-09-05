@@ -38,6 +38,9 @@ The CAT Scale Ticket for a Weigh Event where the Tow Vehicle was weighed alone, 
 **Derived Trailer Weight**:
 The Trailer's actual weight, computed by subtracting a Solo Ticket's Gross Weight from its paired Combined Ticket's Gross Weight.
 
+**Reweigh Reference**:
+A field CAT Scale itself prints on a ticket, connecting a reweigh to the original ticket it belongs with. When a Combined Ticket and a Solo Ticket carry the same (non-blank) Reweigh Reference, they're linked automatically as one Weigh Event's pair; otherwise the user is asked to manually confirm the link (see ADR 0005). Entered manually today, same as every other ticket field — there's no OCR for CAT Scale Tickets yet (see #10).
+
 **Garage**:
 The user's saved collection of Truck Profiles and Trailer Profiles, mixed and matched per Weigh Event.
 
@@ -56,6 +59,12 @@ The Tow Vehicle's own axle groups, summed while hitched to the Trailer, exceed t
 
 **GCWR Overload**:
 The combined actual weight of Tow Vehicle and Trailer exceeds the Tow Vehicle's GCWR. Not evaluated when the Truck Profile has no GCWR on file.
+
+**Trailer GVWR Overload**:
+Derived Trailer Weight exceeds the Trailer Profile's GVWR. Not evaluated when there's no linked Solo Ticket for the Weigh Event.
+
+**Time-Gap Warning**:
+A non-blocking, advisory warning shown when a linked Combined+Solo Ticket pair's two physical weighings are more than a configurable threshold apart (default ~4 hours) — the Trailer may have changed weight (fuel, cargo, hitching/unhitching) in between, making Derived Trailer Weight less reliable. Never blocks or invalidates a Weigh Event, unlike the Overload checks.
 
 **Unverified Value**:
 A number entered manually with no photo or CAT Scale Ticket backing it — most commonly GCWR. Any check depending on one is labeled distinctly in output from checks backed by an OCR'd tag or Ticket.

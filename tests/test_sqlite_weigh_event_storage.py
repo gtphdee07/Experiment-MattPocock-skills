@@ -4,8 +4,9 @@ from towing_app.calculations import (
     AxleCheckResult,
     AxleOverloadResult,
     HitchedGvwrOverloadResult,
+    TrailerGvwrOverloadResult,
 )
-from towing_app.models import CombinedTicket
+from towing_app.models import CombinedTicket, SoloTicket
 from towing_app.storage import SqliteWeighEventStore, WeighEventRecord
 
 TICKET = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
@@ -55,3 +56,42 @@ def test_list_returns_records_in_chronological_order(tmp_path: Path) -> None:
     result = SqliteWeighEventStore(db_path).list()
 
     assert [record.truck_id for record in result] == [1, 2]
+
+
+def test_save_and_list_round_trips_linked_solo_ticket_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+        trailer_gvwr_result=TrailerGvwrOverloadResult(
+            derived_trailer_weight=19680, gvwr_rating=23500
+        ),
+        time_gap_hours=1.5,
+    )
+
+    SqliteWeighEventStore(db_path).save(record)
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.solo_ticket == SoloTicket(steer=5000, drive=9720, gross=14720)
+    assert saved.trailer_gvwr_result == TrailerGvwrOverloadResult(
+        derived_trailer_weight=19680, gvwr_rating=23500
+    )
+    assert saved.time_gap_hours == 1.5
+
+
+def test_save_and_list_round_trips_unlinked_event_with_no_solo_ticket(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "garage.db"
+
+    SqliteWeighEventStore(db_path).save(_record())
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.solo_ticket is None
+    assert saved.trailer_gvwr_result is None
+    assert saved.time_gap_hours is None

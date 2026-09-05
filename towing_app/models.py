@@ -36,15 +36,50 @@ class TrailerProfile:
 @dataclass(frozen=True)
 class CombinedTicket:
     """A CAT Scale Ticket for a Weigh Event where the Tow Vehicle and Trailer
-    were weighed hitched together (see CONTEXT.md: Combined Ticket)."""
+    were weighed hitched together (see CONTEXT.md: Combined Ticket).
+
+    `reweigh_reference` is CAT Scale's own printed field connecting a
+    reweigh to its original ticket - when it matches a paired Solo Ticket's
+    `reweigh_reference`, the two are linked automatically (see CONTEXT.md:
+    Reweigh Reference). `None` when the ticket doesn't carry one, which is
+    the common case for a Combined Ticket entered with no Solo Ticket to
+    link."""
 
     steer: float
     drive: float
     trailer_axle: float
     gross: float
+    reweigh_reference: str | None = None
 
     def __str__(self) -> str:
-        return (
+        base = (
             f"Steer: {self.steer} lb | Drive: {self.drive} lb | "
             f"Trailer Axle: {self.trailer_axle} lb | Gross: {self.gross} lb"
         )
+        if self.reweigh_reference is not None:
+            base += f" | Reweigh Ref: {self.reweigh_reference}"
+        return base
+
+
+@dataclass(frozen=True)
+class SoloTicket:
+    """A CAT Scale Ticket for a Weigh Event where the Tow Vehicle was
+    weighed alone, used to derive Derived Trailer Weight (see CONTEXT.md:
+    Solo Ticket). No Trailer Axle reading - nothing is hitched behind the
+    Tow Vehicle when a Solo Ticket is taken.
+
+    `reweigh_reference` mirrors `CombinedTicket.reweigh_reference` - see
+    that field's docstring."""
+
+    steer: float
+    drive: float
+    gross: float
+    reweigh_reference: str | None = None
+
+    def __str__(self) -> str:
+        base = (
+            f"Steer: {self.steer} lb | Drive: {self.drive} lb | Gross: {self.gross} lb"
+        )
+        if self.reweigh_reference is not None:
+            base += f" | Reweigh Ref: {self.reweigh_reference}"
+        return base

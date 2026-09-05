@@ -8,8 +8,9 @@ from towing_app.calculations import (
     AxleOverloadResult,
     GcwrOverloadResult,
     HitchedGvwrOverloadResult,
+    TrailerGvwrOverloadResult,
 )
-from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
+from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,17 @@ class WeighEventRecord:
     `gcwr_result` is `None` when the Truck Profile had no GCWR on file at
     the time of the Weigh Event - the same "not evaluated" state
     `check_gcwr_overload` returns (see ADR 0002) - rather than a check that
-    ran and passed."""
+    ran and passed.
+
+    `solo_ticket` is `None` unless a Solo Ticket was entered *and* linked
+    (automatically via a matching Reweigh Reference, or manually confirmed -
+    see CONTEXT.md: Reweigh Reference) to this Weigh Event; an entered but
+    unlinked Solo Ticket is discarded rather than persisted (see ADR 0005).
+    `trailer_gvwr_result` mirrors that - `None` whenever `solo_ticket` is,
+    the same "not evaluated" shape as `gcwr_result`. `time_gap_hours` is the
+    user-supplied elapsed time between the two physical weighings for a
+    linked pair (see ADR 0005), also `None` when there's no linked Solo
+    Ticket."""
 
     truck_id: int
     trailer_id: int
@@ -30,6 +41,9 @@ class WeighEventRecord:
     gvwr_result: HitchedGvwrOverloadResult
     timestamp: str
     gcwr_result: GcwrOverloadResult | None = None
+    solo_ticket: SoloTicket | None = None
+    trailer_gvwr_result: TrailerGvwrOverloadResult | None = None
+    time_gap_hours: float | None = None
     id: int | None = field(default=None, compare=False)
 
 
@@ -267,7 +281,14 @@ class SqliteWeighEventStore:
                     trailer_rating REAL NOT NULL,
                     gvwr_rating REAL NOT NULL,
                     gcwr_rating REAL,
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    combined_reweigh_reference TEXT,
+                    solo_steer REAL,
+                    solo_drive REAL,
+                    solo_gross REAL,
+                    solo_reweigh_reference TEXT,
+                    trailer_gvwr_rating REAL,
+                    time_gap_hours REAL
                 )
                 """
             )
@@ -279,12 +300,20 @@ class SqliteWeighEventStore:
         gcwr_rating = (
             record.gcwr_result.gcwr_rating if record.gcwr_result is not None else None
         )
+        solo = record.solo_ticket
+        trailer_gvwr_rating = (
+            record.trailer_gvwr_result.gvwr_rating
+            if record.trailer_gvwr_result is not None
+            else None
+        )
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO weigh_events (truck_id, trailer_id, steer, drive, "
                 "trailer_axle, gross, steer_rating, drive_rating, trailer_rating, "
-                "gvwr_rating, gcwr_rating, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "gvwr_rating, gcwr_rating, timestamp, combined_reweigh_reference, "
+                "solo_steer, solo_drive, solo_gross, solo_reweigh_reference, "
+                "trailer_gvwr_rating, time_gap_hours) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.truck_id,
                     record.trailer_id,
@@ -298,6 +327,13 @@ class SqliteWeighEventStore:
                     record.gvwr_result.gvwr_rating,
                     gcwr_rating,
                     record.timestamp,
+                    record.ticket.reweigh_reference,
+                    solo.steer if solo is not None else None,
+                    solo.drive if solo is not None else None,
+                    solo.gross if solo is not None else None,
+                    solo.reweigh_reference if solo is not None else None,
+                    trailer_gvwr_rating,
+                    record.time_gap_hours,
                 ),
             )
 
@@ -306,36 +342,68 @@ class SqliteWeighEventStore:
             rows = conn.execute(
                 "SELECT id, truck_id, trailer_id, steer, drive, trailer_axle, "
                 "gross, steer_rating, drive_rating, trailer_rating, gvwr_rating, "
-                "gcwr_rating, timestamp FROM weigh_events ORDER BY id"
+                "gcwr_rating, timestamp, combined_reweigh_reference, solo_steer, "
+                "solo_drive, solo_gross, solo_reweigh_reference, "
+                "trailer_gvwr_rating, time_gap_hours "
+                "FROM weigh_events ORDER BY id"
             ).fetchall()
-        return [
-            WeighEventRecord(
-                truck_id=row[1],
-                trailer_id=row[2],
-                ticket=CombinedTicket(
-                    steer=row[3], drive=row[4], trailer_axle=row[5], gross=row[6]
-                ),
-                axle_result=AxleOverloadResult(
-                    steer=AxleCheckResult(
-                        axle_name="Steer Axle", actual=row[3], rating=row[7]
-                    ),
-                    drive=AxleCheckResult(
-                        axle_name="Drive Axle", actual=row[4], rating=row[8]
-                    ),
-                    trailer=AxleCheckResult(
-                        axle_name="Trailer Axle", actual=row[5], rating=row[9]
-                    ),
-                ),
-                gvwr_result=HitchedGvwrOverloadResult(
-                    combined_actual=row[3] + row[4], gvwr_rating=row[10]
-                ),
-                gcwr_result=(
-                    GcwrOverloadResult(combined_actual=row[6], gcwr_rating=row[11])
-                    if row[11] is not None
-                    else None
-                ),
-                timestamp=row[12],
-                id=row[0],
+        records = []
+        for row in rows:
+            solo_steer = row[14]
+            solo_ticket = (
+                SoloTicket(
+                    steer=solo_steer,
+                    drive=row[15],
+                    gross=row[16],
+                    reweigh_reference=row[17],
+                )
+                if solo_steer is not None
+                else None
             )
-            for row in rows
-        ]
+            trailer_gvwr_rating = row[18]
+            trailer_gvwr_result = (
+                TrailerGvwrOverloadResult(
+                    derived_trailer_weight=row[6] - solo_ticket.gross,
+                    gvwr_rating=trailer_gvwr_rating,
+                )
+                if solo_ticket is not None and trailer_gvwr_rating is not None
+                else None
+            )
+            records.append(
+                WeighEventRecord(
+                    truck_id=row[1],
+                    trailer_id=row[2],
+                    ticket=CombinedTicket(
+                        steer=row[3],
+                        drive=row[4],
+                        trailer_axle=row[5],
+                        gross=row[6],
+                        reweigh_reference=row[13],
+                    ),
+                    axle_result=AxleOverloadResult(
+                        steer=AxleCheckResult(
+                            axle_name="Steer Axle", actual=row[3], rating=row[7]
+                        ),
+                        drive=AxleCheckResult(
+                            axle_name="Drive Axle", actual=row[4], rating=row[8]
+                        ),
+                        trailer=AxleCheckResult(
+                            axle_name="Trailer Axle", actual=row[5], rating=row[9]
+                        ),
+                    ),
+                    gvwr_result=HitchedGvwrOverloadResult(
+                        combined_actual=row[3] + row[4], gvwr_rating=row[10]
+                    ),
+                    gcwr_result=(
+                        GcwrOverloadResult(combined_actual=row[6], gcwr_rating=row[11])
+                        if row[11] is not None
+                        else None
+                    ),
+                    timestamp=row[12],
+                    solo_ticket=solo_ticket,
+                    trailer_gvwr_result=trailer_gvwr_result,
+                    time_gap_hours=row[19],
+                    id=row[0],
+                )
+            )
+        return records
