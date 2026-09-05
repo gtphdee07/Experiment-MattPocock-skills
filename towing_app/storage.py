@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -10,33 +11,63 @@ class TruckStore(Protocol):
 
     def list(self) -> list[TruckProfile]: ...
 
+    def update(self, profile: TruckProfile) -> None: ...
+
+    def delete(self, profile_id: int) -> None: ...
+
 
 class TrailerStore(Protocol):
     def save(self, profile: TrailerProfile) -> None: ...
 
     def list(self) -> list[TrailerProfile]: ...
 
+    def update(self, profile: TrailerProfile) -> None: ...
+
+    def delete(self, profile_id: int) -> None: ...
+
 
 class InMemoryTruckStore:
     def __init__(self) -> None:
-        self._profiles: list[TruckProfile] = []
+        self._profiles: dict[int, TruckProfile] = {}
+        self._next_id = 1
 
     def save(self, profile: TruckProfile) -> None:
-        self._profiles.append(profile)
+        profile_id = self._next_id
+        self._next_id += 1
+        self._profiles[profile_id] = replace(profile, id=profile_id)
 
     def list(self) -> list[TruckProfile]:
-        return list(self._profiles)
+        return list(self._profiles.values())
+
+    def update(self, profile: TruckProfile) -> None:
+        if profile.id is None or profile.id not in self._profiles:
+            raise ValueError(f"No Truck Profile with id {profile.id} to update.")
+        self._profiles[profile.id] = profile
+
+    def delete(self, profile_id: int) -> None:
+        self._profiles.pop(profile_id, None)
 
 
 class InMemoryTrailerStore:
     def __init__(self) -> None:
-        self._profiles: list[TrailerProfile] = []
+        self._profiles: dict[int, TrailerProfile] = {}
+        self._next_id = 1
 
     def save(self, profile: TrailerProfile) -> None:
-        self._profiles.append(profile)
+        profile_id = self._next_id
+        self._next_id += 1
+        self._profiles[profile_id] = replace(profile, id=profile_id)
 
     def list(self) -> list[TrailerProfile]:
-        return list(self._profiles)
+        return list(self._profiles.values())
+
+    def update(self, profile: TrailerProfile) -> None:
+        if profile.id is None or profile.id not in self._profiles:
+            raise ValueError(f"No Trailer Profile with id {profile.id} to update.")
+        self._profiles[profile.id] = profile
+
+    def delete(self, profile_id: int) -> None:
+        self._profiles.pop(profile_id, None)
 
 
 class SqliteTruckStore:
@@ -70,13 +101,40 @@ class SqliteTruckStore:
     def list(self) -> list[TruckProfile]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT gvwr, front_gawr, rear_gawr, gcwr "
+                "SELECT id, gvwr, front_gawr, rear_gawr, gcwr "
                 "FROM truck_profiles ORDER BY id"
             ).fetchall()
         return [
-            TruckProfile(gvwr=row[0], front_gawr=row[1], rear_gawr=row[2], gcwr=row[3])
+            TruckProfile(
+                gvwr=row[1],
+                front_gawr=row[2],
+                rear_gawr=row[3],
+                gcwr=row[4],
+                id=row[0],
+            )
             for row in rows
         ]
+
+    def update(self, profile: TruckProfile) -> None:
+        if profile.id is None:
+            raise ValueError("Cannot update a Truck Profile with no id.")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE truck_profiles "
+                "SET gvwr = ?, front_gawr = ?, rear_gawr = ?, gcwr = ? "
+                "WHERE id = ?",
+                (
+                    profile.gvwr,
+                    profile.front_gawr,
+                    profile.rear_gawr,
+                    profile.gcwr,
+                    profile.id,
+                ),
+            )
+
+    def delete(self, profile_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM truck_profiles WHERE id = ?", (profile_id,))
 
 
 class SqliteTrailerStore:
@@ -110,9 +168,33 @@ class SqliteTrailerStore:
     def list(self) -> list[TrailerProfile]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT gvwr, gawr, axle_count, uvw FROM trailer_profiles ORDER BY id"
+                "SELECT id, gvwr, gawr, axle_count, uvw "
+                "FROM trailer_profiles ORDER BY id"
             ).fetchall()
         return [
-            TrailerProfile(gvwr=row[0], gawr=row[1], axle_count=row[2], uvw=row[3])
+            TrailerProfile(
+                gvwr=row[1], gawr=row[2], axle_count=row[3], uvw=row[4], id=row[0]
+            )
             for row in rows
         ]
+
+    def update(self, profile: TrailerProfile) -> None:
+        if profile.id is None:
+            raise ValueError("Cannot update a Trailer Profile with no id.")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE trailer_profiles "
+                "SET gvwr = ?, gawr = ?, axle_count = ?, uvw = ? "
+                "WHERE id = ?",
+                (
+                    profile.gvwr,
+                    profile.gawr,
+                    profile.axle_count,
+                    profile.uvw,
+                    profile.id,
+                ),
+            )
+
+    def delete(self, profile_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM trailer_profiles WHERE id = ?", (profile_id,))
