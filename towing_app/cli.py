@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from towing_app.calculations import (
     AxleOverloadResult,
@@ -839,6 +839,11 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
         if record.time_gap_hours is not None:
             gap = abs(record.time_gap_hours)
             lines.append(f"  Time-Gap: Combined and Solo Tickets {gap} hours apart.")
+        if record.reused_solo_from_timestamp is not None:
+            lines.append(
+                "  Solo Ticket: reused, unchanged, from a Weigh Event recorded "
+                f"{record.reused_solo_from_timestamp}."
+            )
 
     return lines
 
@@ -865,21 +870,128 @@ def run_weigh_event_history(weigh_event_store: WeighEventStore) -> None:
     print(format_weigh_event_history(records))
 
 
+SoloTicketChoice = Literal["weigh_now", "reuse", "skip"]
+
+
+def _find_last_solo_ticket_record(
+    records: Sequence[WeighEventRecord], truck_id: int
+) -> WeighEventRecord | None:
+    """The most recent past Weigh Event for `truck_id` that has a linked
+    Solo Ticket - the source for "reuse the last known weight" (see
+    CONTEXT.md: Reused Solo Weight). `None` when this Truck Profile has no
+    such history, which is also the signal that "reuse" should not be
+    offered at all.
+
+    `WeighEventStore.list()` returns every record unfiltered, so this
+    filter-then-pick-the-latest is done here rather than as a new store
+    method."""
+    candidates = [
+        record
+        for record in records
+        if record.truck_id == truck_id and record.solo_ticket is not None
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda record: record.timestamp)
+
+
+def _ask_solo_ticket_choice(read: ReadFn, *, reuse_available: bool) -> SoloTicketChoice:
+    """Ask whether to add a Solo Ticket for this Weigh Event.
+
+    When no past Weigh Event for this Truck Profile has a linked Solo
+    Ticket, this is the same yes/no question the app has always asked,
+    worded identically - "reuse" is never mentioned when it isn't an actual
+    option. Only when `reuse_available` is true does the question grow a
+    third choice (see CONTEXT.md: Reused Solo Weight, ADR 0006 - no
+    staleness threshold gates whether reuse is offered, only whether
+    qualifying history exists at all)."""
+    if not reuse_available:
+        return (
+            "weigh_now"
+            if _confirm(read, "Add a Solo Ticket for this Weigh Event? [y/N]: ")
+            else "skip"
+        )
+
+    response = (
+        read(
+            "Add a Solo Ticket for this Weigh Event? [y]es - weigh it now / "
+            "[r]euse last known weight / [N]o: "
+        )
+        .strip()
+        .lower()
+    )
+    if response == "y":
+        return "weigh_now"
+    if response == "r":
+        return "reuse"
+    return "skip"
+
+
+def _collect_reused_solo_ticket(
+    read: ReadFn, past_record: WeighEventRecord
+) -> tuple[SoloTicket, str]:
+    """Reuse a past Weigh Event's linked Solo Ticket for this Truck Profile
+    (see CONTEXT.md: Reused Solo Weight). Shows the past Gross Weight and
+    the date it was recorded, then asks whether anything's changed since
+    then - no staleness threshold gates this, regardless of how old
+    `past_record` is (see ADR 0006).
+
+    Only the "no, nothing's changed" branch is implemented here: the past
+    Solo Ticket is reused exactly as-is, still a trusted reading rather
+    than an Unverified Value (see ADR 0006). The "yes, something's
+    changed" branch - typing a new figure, which becomes an Unverified
+    Value - is issue #16's scope, worked separately; answering "yes" here
+    falls back to "no change" for now so #16 has a clean seam to extend
+    without reshaping this function's return type.
+
+    Returns the reused `SoloTicket` and the original record's `timestamp`,
+    for `WeighEventRecord.reused_solo_from_timestamp`."""
+    past_solo = past_record.solo_ticket
+    assert past_solo is not None
+    print(
+        f"Last known Solo weight for this Truck Profile: {past_solo.gross} lbs, "
+        f"recorded {past_record.timestamp}."
+    )
+    changed = _confirm(
+        read,
+        "Has anything changed since then (cargo, fuel, passengers)? [y/N]: ",
+    )
+    if changed:
+        # TODO(#16): collect a new Gross Weight here and mark the resulting
+        # Trailer GVWR Overload as an Unverified Value (see ADR 0006).
+        print("Adjusting the reused weight isn't supported yet - using it as-is.")
+    return past_solo, past_record.timestamp
+
+
 def _collect_linked_solo_ticket(
-    read: ReadFn, ticket: CombinedTicket
-) -> tuple[CombinedTicket, SoloTicket | None, TimeGapWarningResult | None]:
-    """Optionally collect a Solo Ticket and link it to `ticket` (see
-    CONTEXT.md: Solo Ticket, Reweigh Reference).
+    read: ReadFn,
+    ticket: CombinedTicket,
+    past_records: Sequence[WeighEventRecord],
+    truck_id: int,
+) -> tuple[CombinedTicket, SoloTicket | None, TimeGapWarningResult | None, str | None]:
+    """Decide how (or whether) this Weigh Event gets a Solo Ticket: weigh it
+    now, reuse the last known weight for this Truck Profile, or skip
+    entirely (see CONTEXT.md: Solo Ticket, Reused Solo Weight).
 
     Returns the possibly-updated Combined Ticket (its `reweigh_reference`
     is only ever collected here, not in `collect_combined_ticket`, since
-    it's only relevant when a Solo Ticket might link to it), the linked
-    Solo Ticket (`None` if none was added, declined, or not linked), and a
-    Time-Gap Warning result (`None` unless a Solo Ticket was actually
-    linked - see CONTEXT.md: Time-Gap Warning)."""
-    add_solo = _confirm(read, "Add a Solo Ticket for this Weigh Event? [y/N]: ")
-    if not add_solo:
-        return ticket, None, None
+    it's only relevant when a fresh Solo Ticket might link to it), the
+    resulting Solo Ticket (`None` if skipped, declined, or not linked), a
+    Time-Gap Warning result (only for a freshly-linked pair - reusing a
+    weight never produces one, see ADR 0006), and the original timestamp a
+    reused weight came from (`None` unless reuse was actually used)."""
+    last_solo_record = _find_last_solo_ticket_record(past_records, truck_id)
+    choice = _ask_solo_ticket_choice(read, reuse_available=last_solo_record is not None)
+
+    if choice == "skip":
+        return ticket, None, None, None
+
+    if choice == "reuse":
+        assert last_solo_record is not None
+        solo, reused_from_timestamp = _collect_reused_solo_ticket(
+            read, last_solo_record
+        )
+        return ticket, solo, None, reused_from_timestamp
 
     combined_ref = _read_optional_str(
         read,
@@ -888,25 +1000,25 @@ def _collect_linked_solo_ticket(
     )
     ticket = replace(ticket, reweigh_reference=combined_ref)
 
-    solo = collect_solo_ticket(read)
-    if solo is None:
+    fresh_solo = collect_solo_ticket(read)
+    if fresh_solo is None:
         print("Discarded - Solo Ticket not recorded.")
-        return ticket, None, None
+        return ticket, None, None, None
 
-    if not determine_solo_link(read, ticket, solo):
+    if not determine_solo_link(read, ticket, fresh_solo):
         print(
             "Solo Ticket not linked - discarding it. Derived Trailer Weight "
             "and Trailer GVWR Overload will not be evaluated for this Weigh "
             "Event."
         )
-        return ticket, None, None
+        return ticket, None, None, None
 
     gap_hours = _read_float(
         read,
         "Hours between when the Combined and Solo Tickets were weighed "
         "(0 if the same time): ",
     )
-    return ticket, solo, check_time_gap(gap_hours)
+    return ticket, fresh_solo, check_time_gap(gap_hours), None
 
 
 def run_weigh_event(
@@ -936,12 +1048,18 @@ def run_weigh_event(
     print("Saved Trailer Profiles:")
     trailer = select_profile(read, trailers, "Trailer Profile")
 
+    assert truck.id is not None
+    assert trailer.id is not None
+
     ticket = collect_combined_ticket(read)
     if ticket is None:
         print("Discarded - Combined Ticket not recorded.")
         return
 
-    ticket, solo_ticket, time_gap_result = _collect_linked_solo_ticket(read, ticket)
+    past_records = weigh_event_store.list()
+    ticket, solo_ticket, time_gap_result, reused_solo_from_timestamp = (
+        _collect_linked_solo_ticket(read, ticket, past_records, truck.id)
+    )
 
     axle_result = check_axle_overload(truck, trailer, ticket)
     gvwr_result = check_hitched_gvwr_overload(truck, ticket)
@@ -958,8 +1076,6 @@ def run_weigh_event(
         )
     )
 
-    assert truck.id is not None
-    assert trailer.id is not None
     weigh_event_store.save(
         WeighEventRecord(
             truck_id=truck.id,
@@ -973,6 +1089,7 @@ def run_weigh_event(
             time_gap_hours=(
                 time_gap_result.gap_hours if time_gap_result is not None else None
             ),
+            reused_solo_from_timestamp=reused_solo_from_timestamp,
             timestamp=now(),
         )
     )

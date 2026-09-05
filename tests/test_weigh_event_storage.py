@@ -91,3 +91,34 @@ def test_save_and_list_round_trips_linked_solo_ticket_fields() -> None:
         derived_trailer_weight=19680, gvwr_rating=23500
     )
     assert saved.time_gap_hours == 1.5
+
+
+def test_save_and_list_round_trips_reused_solo_from_timestamp() -> None:
+    store = InMemoryWeighEventStore()
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+        trailer_gvwr_result=TrailerGvwrOverloadResult(
+            derived_trailer_weight=19680, gvwr_rating=23500
+        ),
+        reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+    )
+
+    store.save(record)
+
+    [saved] = store.list()
+    assert saved.reused_solo_from_timestamp == "2026-01-15T09:00:00+00:00"
+
+
+def test_save_and_list_round_trips_with_no_reused_solo_from_timestamp() -> None:
+    store = InMemoryWeighEventStore()
+
+    store.save(_record())
+
+    [saved] = store.list()
+    assert saved.reused_solo_from_timestamp is None
