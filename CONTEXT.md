@@ -44,6 +44,10 @@ The user's saved collection of Truck Profiles and Trailer Profiles, mixed and ma
 **Truck Profile** / **Trailer Profile**:
 The saved specs for one Tow Vehicle or Trailer in the Garage: certification-label ratings, plus GCWR (Truck Profile, manual entry) or Axle Count (Trailer Profile, looked up and user-confirmed).
 
+**Nickname**:
+A user-editable display name for a Truck Profile or Trailer Profile — e.g. "Addie", "Goose", or a CDL-style truck number. Set at creation (optional) or during a later edit; when left blank, defaults to a name derived from the Profile's database ID (e.g. "Truck 3"). Not required to be unique. Used everywhere a Profile is shown to the user — the database ID itself is never surfaced as the primary way to refer to a Profile.
+_Avoid_: Reference, Unit Number, Truck Number.
+
 **Axle Overload**:
 A single axle group's actual weight (from a CAT Scale Ticket) exceeds its GAWR.
 

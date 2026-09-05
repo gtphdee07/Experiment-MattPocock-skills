@@ -219,3 +219,6 @@ __marimo__/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# towing-app development-only database (see CLAUDE.md: Keep development activity off the app's real default data path)
+.dev-data/
