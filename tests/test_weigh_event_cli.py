@@ -186,3 +186,55 @@ def test_run_weigh_event_requires_at_least_one_trailer_profile(
 
     output = capsys.readouterr().out
     assert "No Trailer Profiles" in output
+
+
+# --- GCWR Overload (Weigh Event) --------------------------------------------
+
+
+def test_run_weigh_event_reports_gcwr_overload_and_labels_it_unverified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # TRUCK has gcwr=32500; the worked-example Gross Weight of 34400
+    # exceeds it, so GCWR Overload should fire and be labeled Unverified.
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, read)
+
+    output = capsys.readouterr().out
+    assert "GCWR Overload" in output
+    assert "Unverified Value" in output
+    assert "GCWR Overload detected" in output
+
+
+def test_run_weigh_event_reports_not_evaluated_when_no_gcwr_on_file(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_without_gcwr = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900)
+    truck_store = InMemoryTruckStore()
+    truck_store.save(truck_without_gcwr)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, read)
+
+    output = capsys.readouterr().out
+    assert "GCWR Overload" in output
+    assert "not evaluated" in output.lower()
+    assert "no GCWR on file" in output
+    # The other two checks must still run - not evaluated GCWR must not
+    # block or hide them.
+    assert "Axle Overload" in output
+    assert "Hitched GVWR Overload" in output

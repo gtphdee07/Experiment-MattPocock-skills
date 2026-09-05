@@ -7,8 +7,10 @@ from typing import Protocol
 
 from towing_app.calculations import (
     AxleOverloadResult,
+    GcwrOverloadResult,
     HitchedGvwrOverloadResult,
     check_axle_overload,
+    check_gcwr_overload,
     check_hitched_gvwr_overload,
 )
 from towing_app.field_acquisition import (
@@ -466,10 +468,19 @@ def _format_axle_check(check: AxleOverloadResult) -> list[str]:
 
 
 def format_weigh_event_results(
-    axle_result: AxleOverloadResult, gvwr_result: HitchedGvwrOverloadResult
+    axle_result: AxleOverloadResult,
+    gvwr_result: HitchedGvwrOverloadResult,
+    gcwr_result: GcwrOverloadResult | None,
 ) -> str:
-    """Render both checks as plain-language results, always followed by the
-    legal disclaimer."""
+    """Render all three checks as plain-language results, always followed by
+    the legal disclaimer.
+
+    `gcwr_result` is `None` when the Truck Profile has no GCWR on file - a
+    distinct "not evaluated" state (see ADR 0002), reported without blocking
+    or hiding the other two checks. When it is present, GCWR Overload
+    depends on a manually-typed value with no photo/CAT Scale Ticket backing
+    it, so its result is labeled an Unverified Value (see CONTEXT.md:
+    Unverified Value)."""
     lines = ["=== Weigh Event Results ===", ""]
 
     lines.append("Axle Overload")
@@ -502,6 +513,29 @@ def format_weigh_event_results(
         lines.append("  Result: no Hitched GVWR Overload detected.")
     lines.append("")
 
+    lines.append("GCWR Overload")
+    lines.append(
+        "  Checks whether the Combined Ticket's Gross Weight exceeds the "
+        "tow vehicle's GCWR (Gross Combined Weight Rating)."
+    )
+    if gcwr_result is None:
+        lines.append(
+            "  Result: not evaluated - no GCWR on file for this Truck Profile."
+        )
+    else:
+        verdict = "OVERLOADED" if gcwr_result.is_overloaded else "OK"
+        lines.append(
+            f"  Gross Weight: {gcwr_result.combined_actual} lbs actual vs. "
+            f"{gcwr_result.gcwr_rating} lbs rated (Unverified Value - GCWR is "
+            f"manually entered, not backed by a photo or CAT Scale Ticket) "
+            f"-> {verdict}"
+        )
+        if gcwr_result.is_overloaded:
+            lines.append("  Result: GCWR Overload detected.")
+        else:
+            lines.append("  Result: no GCWR Overload detected.")
+    lines.append("")
+
     lines.append(LEGAL_DISCLAIMER)
 
     return "\n".join(lines)
@@ -511,7 +545,9 @@ def run_weigh_event(
     truck_store: TruckStore, trailer_store: TrailerStore, read: ReadFn
 ) -> None:
     """Pick a saved Truck Profile + Trailer Profile pairing, type in a
-    Combined Ticket, and report Axle Overload + Hitched GVWR Overload."""
+    Combined Ticket, and report Axle Overload + Hitched GVWR Overload +
+    GCWR Overload (reported as "not evaluated" when the Truck Profile has
+    no GCWR on file)."""
     trucks = truck_store.list()
     if not trucks:
         print("No Truck Profiles saved yet. Add one with 'truck add' first.")
@@ -535,8 +571,9 @@ def run_weigh_event(
 
     axle_result = check_axle_overload(truck, trailer, ticket)
     gvwr_result = check_hitched_gvwr_overload(truck, ticket)
+    gcwr_result = check_gcwr_overload(truck, ticket)
 
-    print(format_weigh_event_results(axle_result, gvwr_result))
+    print(format_weigh_event_results(axle_result, gvwr_result, gcwr_result))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -581,7 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help=(
             "Pick a Truck Profile + Trailer Profile, enter a Combined "
-            "Ticket, and check for Axle Overload / Hitched GVWR Overload"
+            "Ticket, and check for Axle Overload / Hitched GVWR Overload / "
+            "GCWR Overload"
         ),
     )
 
