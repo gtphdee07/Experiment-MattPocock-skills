@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from towing_app.cli import DEFAULT_DB_PATH, collect_truck_profile, resolve_db_path, run_truck_add
+from towing_app.cli import (
+    DEFAULT_DB_PATH,
+    collect_truck_profile,
+    resolve_db_path,
+    run_truck_add,
+)
 from towing_app.models import TruckProfile
 from towing_app.storage import InMemoryTruckStore
 
@@ -13,7 +18,9 @@ def test_collect_truck_profile_returns_profile_when_confirmed() -> None:
 
     result = collect_truck_profile(read)
 
-    assert result == TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
+    assert result == TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500
+    )
 
 
 def test_collect_truck_profile_returns_none_when_declined() -> None:
@@ -35,7 +42,9 @@ def test_collect_truck_profile_allows_blank_gcwr() -> None:
 
     result = collect_truck_profile(read)
 
-    assert result == TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None)
+    assert result == TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None
+    )
 
 
 def test_collect_truck_profile_confirmation_prompt_echoes_entered_values() -> None:
@@ -64,7 +73,8 @@ def test_run_truck_add_saves_confirmed_profile_to_store() -> None:
 
     run_truck_add(store, read)
 
-    assert store.list() == [TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)]
+    expected = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
+    assert store.list() == [expected]
 
 
 def test_collect_truck_profile_reprompts_on_invalid_number() -> None:
@@ -75,7 +85,9 @@ def test_collect_truck_profile_reprompts_on_invalid_number() -> None:
 
     result = collect_truck_profile(read)
 
-    assert result == TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
+    assert result == TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500
+    )
 
 
 def test_collect_truck_profile_reprompts_on_invalid_gcwr_then_accepts_blank() -> None:
@@ -86,11 +98,14 @@ def test_collect_truck_profile_reprompts_on_invalid_gcwr_then_accepts_blank() ->
 
     result = collect_truck_profile(read)
 
-    assert result == TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None)
+    assert result == TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None
+    )
 
 
 def test_resolve_db_path_uses_env_override() -> None:
-    assert resolve_db_path({"TOWING_APP_DB_PATH": "/tmp/custom.db"}) == Path("/tmp/custom.db")
+    env = {"TOWING_APP_DB_PATH": "/tmp/custom.db"}
+    assert resolve_db_path(env) == Path("/tmp/custom.db")
 
 
 def test_resolve_db_path_falls_back_to_default() -> None:

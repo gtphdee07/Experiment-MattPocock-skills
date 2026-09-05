@@ -5,9 +5,6 @@ description = "Towing Limit Checker: garage, weigh events, and overload checks"
 requires-python = ">=3.12"
 dependencies = []
 
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "mypy>=1.10"]
-
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -21,3 +18,17 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+    "ruff>=0.16.6",
+]

@@ -53,7 +53,8 @@ class SqliteTruckStore:
     def list(self) -> list[TruckProfile]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT gvwr, front_gawr, rear_gawr, gcwr FROM truck_profiles ORDER BY id"
+                "SELECT gvwr, front_gawr, rear_gawr, gcwr "
+                "FROM truck_profiles ORDER BY id"
             ).fetchall()
         return [
             TruckProfile(gvwr=row[0], front_gawr=row[1], rear_gawr=row[2], gcwr=row[3])

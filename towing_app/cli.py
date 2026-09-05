@@ -1,7 +1,7 @@
 import argparse
 import os
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
 
 from towing_app.models import TruckProfile
 from towing_app.storage import SqliteTruckStore, TruckStore
@@ -52,7 +52,9 @@ def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
     if confirmation.strip().lower() != "y":
         return None
 
-    return TruckProfile(gvwr=gvwr, front_gawr=front_gawr, rear_gawr=rear_gawr, gcwr=gcwr)
+    return TruckProfile(
+        gvwr=gvwr, front_gawr=front_gawr, rear_gawr=rear_gawr, gcwr=gcwr
+    )
 
 
 def run_truck_add(store: TruckStore, read: ReadFn) -> None:
@@ -78,7 +80,9 @@ def run_truck_list(store: TruckStore) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="towing-app", description="Towing Limit Checker")
+    parser = argparse.ArgumentParser(
+        prog="towing-app", description="Towing Limit Checker"
+    )
     subparsers = parser.add_subparsers(dest="entity", required=True)
 
     truck_parser = subparsers.add_parser("truck", help="Manage Truck Profiles")
