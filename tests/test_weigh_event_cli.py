@@ -644,6 +644,302 @@ def test_run_weigh_event_no_time_gap_warning_within_threshold(
     assert "within the" in time_gap_section.lower()
 
 
+# --- Reused Solo Weight (Weigh Event) ---------------------------------------
+
+PAST_SOLO = SoloTicket(steer=5000, drive=9720, gross=14720)
+PAST_TIMESTAMP = "2026-01-15T09:00:00+00:00"
+
+
+def _seed_past_solo_record(
+    weigh_event_store: InMemoryWeighEventStore,
+    *,
+    truck_id: int,
+    timestamp: str = PAST_TIMESTAMP,
+    solo_ticket: SoloTicket = PAST_SOLO,
+) -> None:
+    """Seed a past Weigh Event, for `truck_id`, with a linked Solo Ticket -
+    the history "reuse last known weight" needs to be offered at all (see
+    CONTEXT.md: Reused Solo Weight)."""
+    weigh_event_store.save(
+        _make_record(
+            truck_id,
+            999,
+            timestamp,
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=solo_ticket,
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19680, gvwr_rating=23500
+            ),
+        )
+    )
+
+
+def test_run_weigh_event_reuse_not_offered_without_history(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    prompts: list[str] = []
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    assert "Add a Solo Ticket for this Weigh Event? [y/N]: " in prompts
+    assert not any("reuse" in p.lower() for p in prompts)
+
+
+def test_run_weigh_event_reuse_not_offered_for_different_truck(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id + 1000)
+
+    prompts: list[str] = []
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    assert "Add a Solo Ticket for this Weigh Event? [y/N]: " in prompts
+    assert not any("reuse" in p.lower() for p in prompts)
+
+
+def test_run_weigh_event_three_way_prompt_offered_when_reuse_available(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    prompts: list[str] = []
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    solo_prompt = next(p for p in prompts if "Add a Solo Ticket" in p)
+    assert "last known weight" in solo_prompt.lower()
+
+
+def test_run_weigh_event_reuse_last_known_solo_weight_unchanged(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",  # Combined Ticket
+            "r",  # reuse last known Solo weight
+            "n",  # nothing has changed since then
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "14720" in output
+    assert PAST_TIMESTAMP in output
+    assert "Trailer GVWR Overload" in output
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.solo_ticket == PAST_SOLO
+    assert new_record.reused_solo_from_timestamp == PAST_TIMESTAMP
+    assert new_record.trailer_gvwr_result is not None
+    assert new_record.trailer_gvwr_result.derived_trailer_weight == 19680
+    assert new_record.trailer_gvwr_result.is_overloaded is False
+    # Reusing a weight means no fresh Solo Ticket was entered, so the
+    # Time-Gap Warning (a same-visit-pair concept) never runs (ADR 0006).
+    assert new_record.time_gap_hours is None
+
+
+def test_run_weigh_event_reuse_picks_most_recent_solo_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    newer_solo = PAST_SOLO
+    older_solo = SoloTicket(steer=4900, drive=9500, gross=14400)
+    # Insert the newer record first, older second - proves selection is by
+    # timestamp, not merely "last in the list".
+    _seed_past_solo_record(
+        weigh_event_store,
+        truck_id=saved_truck.id,
+        timestamp="2026-03-01T00:00:00+00:00",
+        solo_ticket=newer_solo,
+    )
+    _seed_past_solo_record(
+        weigh_event_store,
+        truck_id=saved_truck.id,
+        timestamp="2026-01-01T00:00:00+00:00",
+        solo_ticket=older_solo,
+    )
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "r", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "14720" in output
+    assert "2026-03-01T00:00:00+00:00" in output
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.solo_ticket == newer_solo
+    assert new_record.reused_solo_from_timestamp == "2026-03-01T00:00:00+00:00"
+
+
+def test_run_weigh_event_reuse_reports_change_falls_back_to_unchanged_for_now(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ticket #16 (worked separately) implements the "yes, something's
+    changed -> type a new figure -> Unverified Value" branch. Until then,
+    answering "yes" here falls back to reusing the weight unchanged."""
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "r", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "isn't supported yet" in output.lower()
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.solo_ticket == PAST_SOLO
+    assert new_record.reused_solo_from_timestamp == PAST_TIMESTAMP
+
+
+def test_run_weigh_event_weigh_now_unchanged_when_reuse_available(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",  # Combined Ticket
+            "y",  # weigh solo now, despite reuse being offered
+            "R555",  # Combined Ticket's reweigh reference
+            "5100",
+            "9600",
+            "14700",
+            "R555",
+            "y",  # confirm Solo Ticket
+            "0",  # hours apart
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "linked automatically" in output.lower()
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.solo_ticket == SoloTicket(
+        steer=5100, drive=9600, gross=14700, reweigh_reference="R555"
+    )
+    assert new_record.reused_solo_from_timestamp is None
+    assert new_record.time_gap_hours == 0.0
+
+
+def test_run_weigh_event_skip_unchanged_when_reuse_available(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.solo_ticket is None
+    assert new_record.reused_solo_from_timestamp is None
+    assert new_record.trailer_gvwr_result is None
+
+
 # --- run_weigh_event_history --------------------------------------------------
 
 
@@ -658,6 +954,7 @@ def _make_record(
     solo_ticket: SoloTicket | None = None,
     trailer_gvwr_result: TrailerGvwrOverloadResult | None = None,
     time_gap_hours: float | None = None,
+    reused_solo_from_timestamp: str | None = None,
 ) -> WeighEventRecord:
     trailer_actual = 24500 if axle_overloaded else 19680
     return WeighEventRecord(
@@ -680,6 +977,7 @@ def _make_record(
         solo_ticket=solo_ticket,
         trailer_gvwr_result=trailer_gvwr_result,
         time_gap_hours=time_gap_hours,
+        reused_solo_from_timestamp=reused_solo_from_timestamp,
         timestamp=timestamp,
     )
 
@@ -825,3 +1123,52 @@ def test_run_weigh_event_history_shows_trailer_gvwr_not_evaluated_without_solo(
     output = capsys.readouterr().out
     assert "Trailer GVWR Overload" in output
     assert "not evaluated" in output.lower()
+
+
+def test_run_weigh_event_history_shows_reused_solo_date_when_present(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19680, gvwr_rating=23500
+            ),
+            reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "2026-01-15T09:00:00+00:00" in output
+
+
+def test_run_weigh_event_history_no_reused_solo_line_when_solo_ticket_fresh(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19680, gvwr_rating=23500
+            ),
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "reused" not in output.lower()

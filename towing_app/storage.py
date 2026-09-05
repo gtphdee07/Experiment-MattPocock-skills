@@ -32,7 +32,14 @@ class WeighEventRecord:
     the same "not evaluated" shape as `gcwr_result`. `time_gap_hours` is the
     user-supplied elapsed time between the two physical weighings for a
     linked pair (see ADR 0005), also `None` when there's no linked Solo
-    Ticket."""
+    Ticket.
+
+    `reused_solo_from_timestamp` is the original `timestamp` of the past
+    Weigh Event this record's `solo_ticket` was carried forward from,
+    unchanged, when the user chose "reuse last known weight" instead of
+    weighing solo again (see CONTEXT.md: Reused Solo Weight, ADR 0006).
+    `None` for a fresh Solo Ticket or when none was linked - it is never set
+    independently of `solo_ticket`."""
 
     truck_id: int
     trailer_id: int
@@ -44,6 +51,7 @@ class WeighEventRecord:
     solo_ticket: SoloTicket | None = None
     trailer_gvwr_result: TrailerGvwrOverloadResult | None = None
     time_gap_hours: float | None = None
+    reused_solo_from_timestamp: str | None = None
     id: int | None = field(default=None, compare=False)
 
 
@@ -288,7 +296,8 @@ class SqliteWeighEventStore:
                     solo_gross REAL,
                     solo_reweigh_reference TEXT,
                     trailer_gvwr_rating REAL,
-                    time_gap_hours REAL
+                    time_gap_hours REAL,
+                    reused_solo_from_timestamp TEXT
                 )
                 """
             )
@@ -312,8 +321,8 @@ class SqliteWeighEventStore:
                 "trailer_axle, gross, steer_rating, drive_rating, trailer_rating, "
                 "gvwr_rating, gcwr_rating, timestamp, combined_reweigh_reference, "
                 "solo_steer, solo_drive, solo_gross, solo_reweigh_reference, "
-                "trailer_gvwr_rating, time_gap_hours) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.truck_id,
                     record.trailer_id,
@@ -334,6 +343,7 @@ class SqliteWeighEventStore:
                     solo.reweigh_reference if solo is not None else None,
                     trailer_gvwr_rating,
                     record.time_gap_hours,
+                    record.reused_solo_from_timestamp,
                 ),
             )
 
@@ -344,7 +354,7 @@ class SqliteWeighEventStore:
                 "gross, steer_rating, drive_rating, trailer_rating, gvwr_rating, "
                 "gcwr_rating, timestamp, combined_reweigh_reference, solo_steer, "
                 "solo_drive, solo_gross, solo_reweigh_reference, "
-                "trailer_gvwr_rating, time_gap_hours "
+                "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp "
                 "FROM weigh_events ORDER BY id"
             ).fetchall()
         records = []
@@ -403,6 +413,7 @@ class SqliteWeighEventStore:
                     solo_ticket=solo_ticket,
                     trailer_gvwr_result=trailer_gvwr_result,
                     time_gap_hours=row[19],
+                    reused_solo_from_timestamp=row[20],
                     id=row[0],
                 )
             )
