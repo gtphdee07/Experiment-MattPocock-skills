@@ -5,15 +5,18 @@ from towing_app.calculations import (
     AxleOverloadResult,
     GcwrOverloadResult,
     HitchedGvwrOverloadResult,
+    TrailerGvwrOverloadResult,
 )
 from towing_app.cli import (
     LEGAL_DISCLAIMER,
     collect_combined_ticket,
+    collect_solo_ticket,
+    determine_solo_link,
     run_weigh_event,
     run_weigh_event_history,
     select_profile,
 )
-from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
+from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     InMemoryTrailerStore,
     InMemoryTruckStore,
@@ -87,6 +90,126 @@ def test_collect_combined_ticket_confirmation_prompt_echoes_entered_values() -> 
     assert "34400" in confirmation_prompt
 
 
+# --- collect_solo_ticket -----------------------------------------------------
+
+
+def test_collect_solo_ticket_returns_ticket_when_confirmed() -> None:
+    responses = iter(["5000", "9720", "14720", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket(read)
+
+    assert result == SoloTicket(steer=5000, drive=9720, gross=14720)
+
+
+def test_collect_solo_ticket_returns_none_when_declined() -> None:
+    responses = iter(["5000", "9720", "14720", "", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket(read)
+
+    assert result is None
+
+
+def test_collect_solo_ticket_captures_reweigh_reference_when_provided() -> None:
+    responses = iter(["5000", "9720", "14720", "R12345", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket(read)
+
+    assert result == SoloTicket(
+        steer=5000, drive=9720, gross=14720, reweigh_reference="R12345"
+    )
+
+
+def test_collect_solo_ticket_reprompts_on_invalid_number() -> None:
+    responses = iter(["not-a-number", "5000", "9720", "14720", "", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_solo_ticket(read)
+
+    assert result == SoloTicket(steer=5000, drive=9720, gross=14720)
+
+
+# --- determine_solo_link ------------------------------------------------------
+
+
+def test_determine_solo_link_links_automatically_on_matching_reference() -> None:
+    combined = CombinedTicket(
+        steer=5640,
+        drive=9080,
+        trailer_axle=19680,
+        gross=34400,
+        reweigh_reference="R12345",
+    )
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720, reweigh_reference="R12345")
+
+    def read(prompt: str) -> str:
+        raise AssertionError("should not prompt when references match")
+
+    result = determine_solo_link(read, combined, solo)
+
+    assert result is True
+
+
+def test_determine_solo_link_matches_case_insensitively_and_ignores_space() -> None:
+    combined = CombinedTicket(
+        steer=5640,
+        drive=9080,
+        trailer_axle=19680,
+        gross=34400,
+        reweigh_reference=" r12345 ",
+    )
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720, reweigh_reference="R12345")
+
+    def read(prompt: str) -> str:
+        raise AssertionError("should not prompt when references match")
+
+    result = determine_solo_link(read, combined, solo)
+
+    assert result is True
+
+
+def test_determine_solo_link_falls_back_to_manual_confirm_on_mismatch() -> None:
+    combined = CombinedTicket(
+        steer=5640,
+        drive=9080,
+        trailer_axle=19680,
+        gross=34400,
+        reweigh_reference="R12345",
+    )
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720, reweigh_reference="R99999")
+    responses = iter(["y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = determine_solo_link(read, combined, solo)
+
+    assert result is True
+
+
+def test_determine_solo_link_falls_back_when_reference_missing() -> None:
+    combined = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720)
+    responses = iter(["n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = determine_solo_link(read, combined, solo)
+
+    assert result is False
+
+
 # --- select_profile ----------------------------------------------------------
 
 
@@ -139,7 +262,7 @@ def test_run_weigh_event_reports_worked_example_results(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -224,7 +347,7 @@ def test_run_weigh_event_reports_gcwr_overload_and_labels_it_unverified(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -253,7 +376,7 @@ def test_run_weigh_event_reports_not_evaluated_when_no_gcwr_on_file(
     trailer_store.save(TRAILER)
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -285,7 +408,7 @@ def test_run_weigh_event_saves_completed_event_to_history() -> None:
     [saved_trailer] = trailer_store.list()
     weigh_event_store = InMemoryWeighEventStore()
 
-    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -305,6 +428,220 @@ def test_run_weigh_event_saves_completed_event_to_history() -> None:
     assert record.gcwr_result is not None
     assert record.gcwr_result.is_overloaded is True
     assert record.timestamp == FIXED_TIMESTAMP
+    # No Solo Ticket was added in this flow - Derived Trailer Weight /
+    # Trailer GVWR Overload must not be evaluated.
+    assert record.solo_ticket is None
+    assert record.trailer_gvwr_result is None
+
+
+def test_run_weigh_event_reports_trailer_gvwr_not_evaluated_without_solo_ticket(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "Trailer GVWR Overload" in output
+    assert "not evaluated" in output.lower()
+    assert "Solo Ticket" in output
+
+
+# --- Solo Ticket linking, Derived Trailer Weight, Trailer GVWR Overload -----
+# --- and the Time-Gap Warning (Weigh Event) ---------------------------------
+
+
+def test_run_weigh_event_links_solo_automatically_on_matching_reweigh_reference(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",  # Combined Ticket
+            "y",  # add a Solo Ticket
+            "R12345",  # Combined Ticket's reweigh reference
+            "5000",
+            "9720",
+            "14720",
+            "R12345",
+            "y",  # Solo Ticket
+            # matching references -> linked automatically, no manual prompt
+            "0",  # hours apart
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "linked automatically" in output.lower()
+    assert "Derived Trailer Weight" in output
+    assert "19680" in output
+    assert "Trailer GVWR Overload" in output
+
+    [record] = weigh_event_store.list()
+    assert record.solo_ticket == SoloTicket(
+        steer=5000, drive=9720, gross=14720, reweigh_reference="R12345"
+    )
+    assert record.trailer_gvwr_result is not None
+    assert record.trailer_gvwr_result.derived_trailer_weight == 19680
+    assert record.trailer_gvwr_result.is_overloaded is False
+    assert record.time_gap_hours == 0.0
+
+
+def test_run_weigh_event_falls_back_to_manual_link_on_reference_mismatch(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",
+            "y",  # add a Solo Ticket
+            "R12345",  # Combined Ticket's reweigh reference
+            "5000",
+            "9720",
+            "14720",
+            "R99999",
+            "y",  # Solo Ticket (different ref)
+            "y",  # manual confirm: yes, same Weigh Event
+            "5",  # hours apart - exceeds the default 4-hour threshold
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "Time-Gap Warning" in output
+    assert "4" in output  # the threshold is named in the warning
+
+    [record] = weigh_event_store.list()
+    assert record.solo_ticket is not None
+    assert record.trailer_gvwr_result is not None
+    assert record.time_gap_hours == 5.0
+    # The warning is advisory only - the Weigh Event is still fully recorded.
+    assert record.id is not None
+
+
+def test_run_weigh_event_discards_solo_ticket_when_manual_link_declined(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",
+            "y",  # add a Solo Ticket
+            "",  # no Combined Ticket reweigh reference
+            "5000",
+            "9720",
+            "14720",
+            "",  # Solo Ticket, no reweigh reference either
+            "y",  # confirm saving the Solo Ticket itself
+            "n",  # manual confirm: no, not the same Weigh Event
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "not linked" in output.lower() or "discard" in output.lower()
+    assert "not evaluated" in output.lower()
+
+    [record] = weigh_event_store.list()
+    assert record.solo_ticket is None
+    assert record.trailer_gvwr_result is None
+    assert record.time_gap_hours is None
+
+
+def test_run_weigh_event_no_time_gap_warning_within_threshold(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(
+        [
+            "1",
+            "1",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",
+            "y",
+            "R1",
+            "5000",
+            "9720",
+            "14720",
+            "R1",
+            "y",
+            "1",  # well within the default 4-hour threshold
+        ]
+    )
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    output = capsys.readouterr().out
+    assert "Time-Gap Warning" in output
+    # No alarming language in the Time-Gap section when within threshold.
+    time_gap_section = output[output.index("Time-Gap Warning") :]
+    assert "warning:" not in time_gap_section.lower()
+    assert "within the" in time_gap_section.lower()
 
 
 # --- run_weigh_event_history --------------------------------------------------
@@ -318,6 +655,9 @@ def _make_record(
     axle_overloaded: bool,
     gvwr_overloaded: bool,
     gcwr_result: GcwrOverloadResult | None = None,
+    solo_ticket: SoloTicket | None = None,
+    trailer_gvwr_result: TrailerGvwrOverloadResult | None = None,
+    time_gap_hours: float | None = None,
 ) -> WeighEventRecord:
     trailer_actual = 24500 if axle_overloaded else 19680
     return WeighEventRecord(
@@ -337,6 +677,9 @@ def _make_record(
             combined_actual=15000 if gvwr_overloaded else 14000, gvwr_rating=14500
         ),
         gcwr_result=gcwr_result,
+        solo_ticket=solo_ticket,
+        trailer_gvwr_result=trailer_gvwr_result,
+        time_gap_hours=time_gap_hours,
         timestamp=timestamp,
     )
 
@@ -432,4 +775,53 @@ def test_run_weigh_event_history_shows_not_evaluated_when_no_gcwr_result(
 
     output = capsys.readouterr().out
     assert "GCWR Overload" in output
+    assert "not evaluated" in output.lower()
+
+
+def test_run_weigh_event_history_shows_trailer_gvwr_result_when_present(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19680, gvwr_rating=23500
+            ),
+            time_gap_hours=1.0,
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Trailer GVWR Overload" in output
+    assert "19680" in output
+    assert "23500" in output
+    assert "Time-Gap" in output
+
+
+def test_run_weigh_event_history_shows_trailer_gvwr_not_evaluated_without_solo(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Trailer GVWR Overload" in output
     assert "not evaluated" in output.lower()

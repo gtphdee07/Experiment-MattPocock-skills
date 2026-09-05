@@ -10,9 +10,13 @@ from towing_app.calculations import (
     AxleOverloadResult,
     GcwrOverloadResult,
     HitchedGvwrOverloadResult,
+    TimeGapWarningResult,
+    TrailerGvwrOverloadResult,
     check_axle_overload,
     check_gcwr_overload,
     check_hitched_gvwr_overload,
+    check_time_gap,
+    check_trailer_gvwr_overload,
 )
 from towing_app.field_acquisition import (
     ClaudeVisionTrailerTagFieldSource,
@@ -21,7 +25,7 @@ from towing_app.field_acquisition import (
     FieldSourceUnavailableError,
     WebAxleCountFieldSource,
 )
-from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
+from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     SqliteTrailerStore,
     SqliteTruckStore,
@@ -93,6 +97,11 @@ def _read_optional_float(read: ReadFn, prompt: str) -> float | None:
         return None if not raw.strip() else float(raw)
 
     return _prompt_until_valid(read, prompt, parse, "number")
+
+
+def _read_optional_str(read: ReadFn, prompt: str) -> str | None:
+    stripped = read(prompt).strip()
+    return stripped if stripped else None
 
 
 def _read_float_with_default(read: ReadFn, prompt: str, current: float) -> float:
@@ -579,6 +588,64 @@ def collect_combined_ticket(read: ReadFn) -> CombinedTicket | None:
     )
 
 
+def collect_solo_ticket(read: ReadFn) -> SoloTicket | None:
+    """Manually enter a Solo Ticket: the CAT Scale reading for a Weigh
+    Event where the Tow Vehicle was weighed alone (see CONTEXT.md: Solo
+    Ticket). No Trailer Axle field - nothing is hitched behind the Tow
+    Vehicle for a Solo Ticket."""
+    steer = _read_float(read, "Steer Axle weight (lbs): ")
+    drive = _read_float(read, "Drive Axle weight (lbs): ")
+    gross = _read_float(read, "Gross Weight (lbs): ")
+    reweigh_reference = _read_optional_str(
+        read,
+        "Reweigh reference printed on the ticket, if any (optional, press "
+        "Enter to skip): ",
+    )
+
+    confirmed = _confirm(
+        read,
+        f"Steer: {steer} lbs, Drive: {drive} lbs, Gross: {gross} lbs. "
+        "Save this Solo Ticket? [y/N]: ",
+    )
+    if not confirmed:
+        return None
+
+    return SoloTicket(
+        steer=steer, drive=drive, gross=gross, reweigh_reference=reweigh_reference
+    )
+
+
+def determine_solo_link(
+    read: ReadFn, combined: CombinedTicket, solo: SoloTicket
+) -> bool:
+    """Decide whether a Solo Ticket belongs to the same Weigh Event as the
+    Combined Ticket (see CONTEXT.md: Reweigh Reference).
+
+    Automatic when both tickets carry a matching, non-blank reweigh
+    reference - CAT Scale's own printed field connecting a reweigh to its
+    original ticket. Otherwise this falls back to asking the user to
+    manually confirm the link, per the acceptance criteria in issue #9."""
+    combined_ref = combined.reweigh_reference
+    solo_ref = solo.reweigh_reference
+    if (
+        combined_ref is not None
+        and solo_ref is not None
+        and combined_ref.strip().lower() == solo_ref.strip().lower()
+    ):
+        print(
+            f"Reweigh reference '{combined_ref}' matches on both tickets - "
+            "linked automatically."
+        )
+        return True
+
+    return _confirm(
+        read,
+        "No matching reweigh reference found on the two tickets. Manually "
+        "confirm the Solo Ticket belongs to the same Weigh Event as the "
+        "Combined Ticket? [y/N]: ",
+    )
+
+
 def _format_axle_check(check: AxleOverloadResult) -> list[str]:
     lines = []
     for result in (check.steer, check.drive, check.trailer):
@@ -594,16 +661,25 @@ def format_weigh_event_results(
     axle_result: AxleOverloadResult,
     gvwr_result: HitchedGvwrOverloadResult,
     gcwr_result: GcwrOverloadResult | None,
+    trailer_gvwr_result: TrailerGvwrOverloadResult | None = None,
+    time_gap_result: TimeGapWarningResult | None = None,
 ) -> str:
-    """Render all three checks as plain-language results, always followed by
-    the legal disclaimer.
+    """Render all checks as plain-language results, always followed by the
+    legal disclaimer.
 
     `gcwr_result` is `None` when the Truck Profile has no GCWR on file - a
     distinct "not evaluated" state (see ADR 0002), reported without blocking
     or hiding the other two checks. When it is present, GCWR Overload
     depends on a manually-typed value with no photo/CAT Scale Ticket backing
     it, so its result is labeled an Unverified Value (see CONTEXT.md:
-    Unverified Value)."""
+    Unverified Value).
+
+    `trailer_gvwr_result` is `None` whenever there's no linked Solo Ticket
+    for this Weigh Event - also reported as "not evaluated" rather than
+    hidden (see CONTEXT.md: Trailer GVWR Overload). `time_gap_result` is
+    only present at all when a Solo Ticket was linked - unlike the Overload
+    checks it's advisory only and never labeled OVERLOADED/OK (see
+    CONTEXT.md: Time-Gap Warning)."""
     lines = ["=== Weigh Event Results ===", ""]
 
     lines.append("Axle Overload")
@@ -659,6 +735,49 @@ def format_weigh_event_results(
             lines.append("  Result: no GCWR Overload detected.")
     lines.append("")
 
+    lines.append("Trailer GVWR Overload")
+    lines.append(
+        "  Checks whether Derived Trailer Weight (a linked Solo Ticket's "
+        "Gross Weight subtracted from the Combined Ticket's Gross Weight) "
+        "exceeds the Trailer Profile's GVWR."
+    )
+    if trailer_gvwr_result is None:
+        lines.append(
+            "  Result: not evaluated - no linked Solo Ticket for this Weigh Event."
+        )
+    else:
+        verdict = "OVERLOADED" if trailer_gvwr_result.is_overloaded else "OK"
+        lines.append(
+            f"  Derived Trailer Weight: {trailer_gvwr_result.derived_trailer_weight} "
+            f"lbs vs. {trailer_gvwr_result.gvwr_rating} lbs rated -> {verdict}"
+        )
+        if trailer_gvwr_result.is_overloaded:
+            lines.append("  Result: Trailer GVWR Overload detected.")
+        else:
+            lines.append("  Result: no Trailer GVWR Overload detected.")
+    lines.append("")
+
+    if time_gap_result is not None:
+        lines.append("Time-Gap Warning")
+        lines.append(
+            "  Non-blocking: flags when the linked pair's two physical "
+            "weighings were far enough apart that the Trailer may have "
+            "changed weight in between."
+        )
+        gap = abs(time_gap_result.gap_hours)
+        if time_gap_result.exceeds_threshold:
+            lines.append(
+                f"  Warning: the Combined and Solo Tickets were weighed {gap} "
+                f"hours apart, more than the {time_gap_result.threshold_hours}-"
+                "hour threshold. Derived Trailer Weight may be less accurate."
+            )
+        else:
+            lines.append(
+                f"  Combined and Solo Tickets were weighed {gap} hours apart - "
+                f"within the {time_gap_result.threshold_hours}-hour threshold."
+            )
+        lines.append("")
+
     lines.append(LEGAL_DISCLAIMER)
 
     return "\n".join(lines)
@@ -690,6 +809,25 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
             f"vs. {record.gcwr_result.gcwr_rating} lbs rated (Unverified Value) "
             f"-> {gcwr_verdict}"
         )
+
+    if record.trailer_gvwr_result is None:
+        lines.append(
+            "  Trailer GVWR Overload: not evaluated - no linked Solo Ticket "
+            "for this Weigh Event."
+        )
+    else:
+        trailer_verdict = (
+            "OVERLOADED" if record.trailer_gvwr_result.is_overloaded else "OK"
+        )
+        lines.append(
+            "  Trailer GVWR Overload: Derived Trailer Weight "
+            f"{record.trailer_gvwr_result.derived_trailer_weight} lbs vs. "
+            f"{record.trailer_gvwr_result.gvwr_rating} lbs rated -> {trailer_verdict}"
+        )
+        if record.time_gap_hours is not None:
+            gap = abs(record.time_gap_hours)
+            lines.append(f"  Time-Gap: Combined and Solo Tickets {gap} hours apart.")
+
     return lines
 
 
@@ -713,6 +851,50 @@ def run_weigh_event_history(weigh_event_store: WeighEventStore) -> None:
         print("No Weigh Events recorded yet.")
         return
     print(format_weigh_event_history(records))
+
+
+def _collect_linked_solo_ticket(
+    read: ReadFn, ticket: CombinedTicket
+) -> tuple[CombinedTicket, SoloTicket | None, TimeGapWarningResult | None]:
+    """Optionally collect a Solo Ticket and link it to `ticket` (see
+    CONTEXT.md: Solo Ticket, Reweigh Reference).
+
+    Returns the possibly-updated Combined Ticket (its `reweigh_reference`
+    is only ever collected here, not in `collect_combined_ticket`, since
+    it's only relevant when a Solo Ticket might link to it), the linked
+    Solo Ticket (`None` if none was added, declined, or not linked), and a
+    Time-Gap Warning result (`None` unless a Solo Ticket was actually
+    linked - see CONTEXT.md: Time-Gap Warning)."""
+    add_solo = _confirm(read, "Add a Solo Ticket for this Weigh Event? [y/N]: ")
+    if not add_solo:
+        return ticket, None, None
+
+    combined_ref = _read_optional_str(
+        read,
+        "Reweigh reference printed on the Combined Ticket, if any (optional, "
+        "press Enter to skip): ",
+    )
+    ticket = replace(ticket, reweigh_reference=combined_ref)
+
+    solo = collect_solo_ticket(read)
+    if solo is None:
+        print("Discarded - Solo Ticket not recorded.")
+        return ticket, None, None
+
+    if not determine_solo_link(read, ticket, solo):
+        print(
+            "Solo Ticket not linked - discarding it. Derived Trailer Weight "
+            "and Trailer GVWR Overload will not be evaluated for this Weigh "
+            "Event."
+        )
+        return ticket, None, None
+
+    gap_hours = _read_float(
+        read,
+        "Hours between when the Combined and Solo Tickets were weighed "
+        "(0 if the same time): ",
+    )
+    return ticket, solo, check_time_gap(gap_hours)
 
 
 def run_weigh_event(
@@ -747,11 +929,22 @@ def run_weigh_event(
         print("Discarded - Combined Ticket not recorded.")
         return
 
+    ticket, solo_ticket, time_gap_result = _collect_linked_solo_ticket(read, ticket)
+
     axle_result = check_axle_overload(truck, trailer, ticket)
     gvwr_result = check_hitched_gvwr_overload(truck, ticket)
     gcwr_result = check_gcwr_overload(truck, ticket)
+    trailer_gvwr_result = check_trailer_gvwr_overload(trailer, ticket, solo_ticket)
 
-    print(format_weigh_event_results(axle_result, gvwr_result, gcwr_result))
+    print(
+        format_weigh_event_results(
+            axle_result,
+            gvwr_result,
+            gcwr_result,
+            trailer_gvwr_result,
+            time_gap_result,
+        )
+    )
 
     assert truck.id is not None
     assert trailer.id is not None
@@ -763,6 +956,11 @@ def run_weigh_event(
             axle_result=axle_result,
             gvwr_result=gvwr_result,
             gcwr_result=gcwr_result,
+            solo_ticket=solo_ticket,
+            trailer_gvwr_result=trailer_gvwr_result,
+            time_gap_hours=(
+                time_gap_result.gap_hours if time_gap_result is not None else None
+            ),
             timestamp=now(),
         )
     )

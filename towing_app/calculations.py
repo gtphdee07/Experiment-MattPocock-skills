@@ -8,7 +8,9 @@ result out.
 
 from dataclasses import dataclass
 
-from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
+from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
+
+DEFAULT_TIME_GAP_THRESHOLD_HOURS = 4.0
 
 
 @dataclass(frozen=True)
@@ -120,3 +122,70 @@ def check_gcwr_overload(
     if truck.gcwr is None:
         return None
     return GcwrOverloadResult(combined_actual=ticket.gross, gcwr_rating=truck.gcwr)
+
+
+def compute_derived_trailer_weight(combined: CombinedTicket, solo: SoloTicket) -> float:
+    """Derived Trailer Weight: a linked pair's Combined Ticket Gross Weight
+    minus its Solo Ticket Gross Weight (see CONTEXT.md: Derived Trailer
+    Weight). Pure arithmetic - it's the caller's job to only call this for
+    a pair that's actually linked (see CONTEXT.md: Reweigh Reference)."""
+    return combined.gross - solo.gross
+
+
+@dataclass(frozen=True)
+class TrailerGvwrOverloadResult:
+    """Trailer GVWR Overload: Derived Trailer Weight compared against the
+    Trailer Profile's GVWR (see CONTEXT.md: Trailer GVWR Overload). Only
+    ever constructed when there's a linked Solo Ticket to derive Trailer
+    Weight from - `check_trailer_gvwr_overload` returns `None` instead when
+    there isn't, the same "not evaluated" shape `check_gcwr_overload` uses
+    (see ADR 0002), though unlike GCWR this is never an Unverified Value:
+    Trailer GVWR is a required field on every saved Trailer Profile, not an
+    optional manually-typed one."""
+
+    derived_trailer_weight: float
+    gvwr_rating: float
+
+    @property
+    def is_overloaded(self) -> bool:
+        return self.derived_trailer_weight > self.gvwr_rating
+
+
+def check_trailer_gvwr_overload(
+    trailer: TrailerProfile, combined: CombinedTicket, solo: SoloTicket | None
+) -> TrailerGvwrOverloadResult | None:
+    """Compare Derived Trailer Weight against the Trailer Profile's GVWR.
+    Not evaluated - returns `None` - when there's no linked Solo Ticket to
+    derive a Trailer Weight from (see CONTEXT.md: Trailer GVWR Overload)."""
+    if solo is None:
+        return None
+    return TrailerGvwrOverloadResult(
+        derived_trailer_weight=compute_derived_trailer_weight(combined, solo),
+        gvwr_rating=trailer.gvwr,
+    )
+
+
+@dataclass(frozen=True)
+class TimeGapWarningResult:
+    """Time-Gap Warning: a linked Combined+Solo Ticket pair's timestamps are
+    more than a configurable threshold apart (see CONTEXT.md: Time-Gap
+    Warning). Non-blocking and advisory only - unlike the Overload checks,
+    nothing in this result stops or invalidates a Weigh Event."""
+
+    gap_hours: float
+    threshold_hours: float
+
+    @property
+    def exceeds_threshold(self) -> bool:
+        return abs(self.gap_hours) > self.threshold_hours
+
+
+def check_time_gap(
+    gap_hours: float,
+    threshold_hours: float = DEFAULT_TIME_GAP_THRESHOLD_HOURS,
+) -> TimeGapWarningResult:
+    """Compare the elapsed time between a linked pair's two physical
+    weighings against `threshold_hours` (default ~4 hours, see CONTEXT.md:
+    Time-Gap Warning). `gap_hours` may be negative (Solo weighed before
+    Combined) - only its magnitude matters."""
+    return TimeGapWarningResult(gap_hours=gap_hours, threshold_hours=threshold_hours)
