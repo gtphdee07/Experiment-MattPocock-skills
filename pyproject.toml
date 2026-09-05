@@ -3,7 +3,9 @@ name = "towing-app"
 version = "0.1.0"
 description = "Towing Limit Checker: garage, weigh events, and overload checks"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "anthropic>=1.4.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
