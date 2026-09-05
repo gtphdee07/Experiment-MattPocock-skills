@@ -12,6 +12,7 @@ from towing_app.cli import (
     collect_combined_ticket,
     collect_solo_ticket,
     determine_solo_link,
+    format_weigh_event_results,
     run_weigh_event,
     run_weigh_event_history,
     select_profile,
@@ -456,6 +457,63 @@ def test_run_weigh_event_reports_trailer_gvwr_not_evaluated_without_solo_ticket(
     assert "Solo Ticket" in output
 
 
+# --- Trailer GVWR Overload: near-limit flagging (#14, see ADR 0006) --------
+
+_AXLE_RESULT = AxleOverloadResult(
+    steer=AxleCheckResult(axle_name="Steer Axle", actual=5640, rating=6000),
+    drive=AxleCheckResult(axle_name="Drive Axle", actual=9080, rating=9900),
+    trailer=AxleCheckResult(axle_name="Trailer Axle", actual=19680, rating=24000),
+)
+_GVWR_RESULT = HitchedGvwrOverloadResult(combined_actual=14720, gvwr_rating=14000)
+
+
+def test_format_weigh_event_results_flags_near_limit_trailer_gvwr() -> None:
+    # 100 lbs under TRAILER's 23500 GVWR - boundary inclusive, must flag.
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23400, gvwr_rating=23500
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    assert "no Trailer GVWR Overload detected" in output
+    assert "near" in output.lower()
+    assert "limit" in output.lower()
+
+
+def test_format_weigh_event_results_does_not_flag_near_limit_when_comfortably_under() -> (  # noqa: E501
+    None
+):
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=19680, gvwr_rating=23500
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    assert "no Trailer GVWR Overload detected" in output
+    assert "near" not in output.lower()
+
+
+def test_format_weigh_event_results_never_flags_near_limit_when_actually_overloaded() -> (  # noqa: E501
+    None
+):
+    # Only 100 lbs over - a tiny margin, but being over is reported as
+    # overloaded, full stop, with no "close" qualifier (see ADR 0006).
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23600, gvwr_rating=23500
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    assert "Trailer GVWR Overload detected" in output
+    assert "near" not in output.lower()
+
+
 # --- Solo Ticket linking, Derived Trailer Weight, Trailer GVWR Overload -----
 # --- and the Time-Gap Warning (Weigh Event) ---------------------------------
 
@@ -804,6 +862,56 @@ def test_run_weigh_event_history_shows_trailer_gvwr_result_when_present(
     assert "19680" in output
     assert "23500" in output
     assert "Time-Gap" in output
+
+
+def test_run_weigh_event_history_flags_near_limit_trailer_gvwr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=23400, gvwr_rating=23500
+            ),
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "near" in output.lower()
+    assert "limit" in output.lower()
+
+
+def test_run_weigh_event_history_never_flags_near_limit_when_actually_overloaded(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=23600, gvwr_rating=23500
+            ),
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "OVERLOADED" in output
+    assert "near" not in output.lower()
 
 
 def test_run_weigh_event_history_shows_trailer_gvwr_not_evaluated_without_solo(

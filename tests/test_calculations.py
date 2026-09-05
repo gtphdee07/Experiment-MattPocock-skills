@@ -1,4 +1,5 @@
 from towing_app.calculations import (
+    TrailerGvwrOverloadResult,
     check_axle_overload,
     check_gcwr_overload,
     check_hitched_gvwr_overload,
@@ -244,6 +245,50 @@ def test_trailer_gvwr_overload_exact_match_to_gvwr_is_not_overloaded() -> None:
     assert result is not None
     assert result.derived_trailer_weight == 23500
     assert result.is_overloaded is False
+
+
+# --- Trailer GVWR Overload: near-limit flagging (#14, see ADR 0006) ----------
+
+
+def test_trailer_gvwr_overload_flagged_near_limit_when_exactly_100_under() -> None:
+    # Boundary inclusive - exactly 100 lbs under counts as flagged.
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=23400, gvwr_rating=23500)
+
+    assert result.is_overloaded is False
+    assert result.is_near_limit is True
+
+
+def test_trailer_gvwr_overload_flagged_near_limit_when_exact_match_to_gvwr() -> None:
+    # Exactly at the rating (0 lbs of margin) is still "under", not over.
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=23500, gvwr_rating=23500)
+
+    assert result.is_overloaded is False
+    assert result.is_near_limit is True
+
+
+def test_trailer_gvwr_overload_not_flagged_near_limit_when_comfortably_under() -> None:
+    # 101 lbs under - just outside the 100 lb margin.
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=23399, gvwr_rating=23500)
+
+    assert result.is_overloaded is False
+    assert result.is_near_limit is False
+
+
+def test_trailer_gvwr_overload_never_flagged_near_limit_when_barely_over() -> None:
+    # Only 1 lb over the limit - despite the tiny margin, being over is
+    # reported as overloaded, full stop, with no "close" qualifier layered on
+    # top (see ADR 0006: the flag never fires on the over-the-limit side).
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=23501, gvwr_rating=23500)
+
+    assert result.is_overloaded is True
+    assert result.is_near_limit is False
+
+
+def test_trailer_gvwr_overload_never_flagged_near_limit_when_far_over() -> None:
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=30000, gvwr_rating=23500)
+
+    assert result.is_overloaded is True
+    assert result.is_near_limit is False
 
 
 # --- Time-Gap Warning ---------------------------------------------------------
