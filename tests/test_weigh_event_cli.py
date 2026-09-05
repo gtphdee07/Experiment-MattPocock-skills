@@ -1,16 +1,32 @@
 import pytest
 
+from towing_app.calculations import (
+    AxleCheckResult,
+    AxleOverloadResult,
+    HitchedGvwrOverloadResult,
+)
 from towing_app.cli import (
     LEGAL_DISCLAIMER,
     collect_combined_ticket,
     run_weigh_event,
+    run_weigh_event_history,
     select_profile,
 )
 from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
-from towing_app.storage import InMemoryTrailerStore, InMemoryTruckStore
+from towing_app.storage import (
+    InMemoryTrailerStore,
+    InMemoryTruckStore,
+    InMemoryWeighEventStore,
+    WeighEventRecord,
+)
 
 TRUCK = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
 TRAILER = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)
+FIXED_TIMESTAMP = "2026-09-05T12:00:00+00:00"
+
+
+def _fixed_now() -> str:
+    return FIXED_TIMESTAMP
 
 
 # --- collect_combined_ticket ------------------------------------------------
@@ -120,13 +136,14 @@ def test_run_weigh_event_reports_worked_example_results(
     truck_store.save(TRUCK)
     trailer_store = InMemoryTrailerStore()
     trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
 
     responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
 
     def read(prompt: str) -> str:
         return next(responses)
 
-    run_weigh_event(truck_store, trailer_store, read)
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
 
     output = capsys.readouterr().out
     assert "Axle Overload" in output
@@ -144,16 +161,18 @@ def test_run_weigh_event_declines_without_saving_or_crashing(
     truck_store.save(TRUCK)
     trailer_store = InMemoryTrailerStore()
     trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
 
     responses = iter(["1", "1", "5640", "9080", "19680", "34400", "n"])
 
     def read(prompt: str) -> str:
         return next(responses)
 
-    run_weigh_event(truck_store, trailer_store, read)
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
 
     output = capsys.readouterr().out
     assert "not recorded" in output.lower()
+    assert weigh_event_store.list() == []
 
 
 def test_run_weigh_event_requires_at_least_one_truck_profile(
@@ -162,11 +181,12 @@ def test_run_weigh_event_requires_at_least_one_truck_profile(
     truck_store = InMemoryTruckStore()
     trailer_store = InMemoryTrailerStore()
     trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
 
     def read(prompt: str) -> str:
         raise AssertionError("should not prompt when no Truck Profiles exist")
 
-    run_weigh_event(truck_store, trailer_store, read)
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
 
     output = capsys.readouterr().out
     assert "No Truck Profiles" in output
@@ -178,11 +198,124 @@ def test_run_weigh_event_requires_at_least_one_trailer_profile(
     truck_store = InMemoryTruckStore()
     truck_store.save(TRUCK)
     trailer_store = InMemoryTrailerStore()
+    weigh_event_store = InMemoryWeighEventStore()
 
     def read(prompt: str) -> str:
         raise AssertionError("should not prompt when no Trailer Profiles exist")
 
-    run_weigh_event(truck_store, trailer_store, read)
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
 
     output = capsys.readouterr().out
     assert "No Trailer Profiles" in output
+
+
+# --- run_weigh_event: persists to History ------------------------------------
+
+
+def test_run_weigh_event_saves_completed_event_to_history() -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    [saved_trailer] = trailer_store.list()
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(["1", "1", "5640", "9080", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read, now=_fixed_now)
+
+    [record] = weigh_event_store.list()
+    assert record.truck_id == saved_truck.id
+    assert record.trailer_id == saved_trailer.id
+    assert record.ticket == CombinedTicket(
+        steer=5640, drive=9080, trailer_axle=19680, gross=34400
+    )
+    assert record.axle_result.any_overloaded is False
+    assert record.gvwr_result.is_overloaded is True
+    assert record.timestamp == FIXED_TIMESTAMP
+
+
+# --- run_weigh_event_history --------------------------------------------------
+
+
+def _make_record(
+    truck_id: int,
+    trailer_id: int,
+    timestamp: str,
+    *,
+    axle_overloaded: bool,
+    gvwr_overloaded: bool,
+) -> WeighEventRecord:
+    trailer_actual = 24500 if axle_overloaded else 19680
+    return WeighEventRecord(
+        truck_id=truck_id,
+        trailer_id=trailer_id,
+        ticket=CombinedTicket(
+            steer=5640, drive=9080, trailer_axle=trailer_actual, gross=34400
+        ),
+        axle_result=AxleOverloadResult(
+            steer=AxleCheckResult(axle_name="Steer Axle", actual=5640, rating=6000),
+            drive=AxleCheckResult(axle_name="Drive Axle", actual=9080, rating=9900),
+            trailer=AxleCheckResult(
+                axle_name="Trailer Axle", actual=trailer_actual, rating=24000
+            ),
+        ),
+        gvwr_result=HitchedGvwrOverloadResult(
+            combined_actual=15000 if gvwr_overloaded else 14000, gvwr_rating=14500
+        ),
+        timestamp=timestamp,
+    )
+
+
+def test_run_weigh_event_history_with_no_events_prints_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "no weigh events" in output.lower()
+
+
+def test_run_weigh_event_history_lists_events_in_chronological_order(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-01T08:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+        )
+    )
+    weigh_event_store.save(
+        _make_record(
+            3,
+            4,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=True,
+            gvwr_overloaded=True,
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    first_index = output.index("2026-09-01T08:00:00+00:00")
+    second_index = output.index("2026-09-05T12:00:00+00:00")
+    assert first_index < second_index
+    # Each entry names its Truck+Trailer pairing.
+    assert "1" in output and "2" in output
+    assert "3" in output and "4" in output
+    # Each check's result is shown - the first event passes both, the second
+    # fails both.
+    assert output.count("OVERLOADED") >= 2
+    assert "OK" in output
+    assert LEGAL_DISCLAIMER in output
