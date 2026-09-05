@@ -2,6 +2,7 @@ import argparse
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -22,8 +23,11 @@ from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     SqliteTrailerStore,
     SqliteTruckStore,
+    SqliteWeighEventStore,
     TrailerStore,
     TruckStore,
+    WeighEventRecord,
+    WeighEventStore,
 )
 
 ReadFn = Callable[[str], str]
@@ -50,6 +54,10 @@ LEGAL_DISCLAIMER = (
     "doubt, consult a weight-distribution/towing expert or your vehicle "
     "manufacturer before towing."
 )
+
+
+def _iso_now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def resolve_db_path(env: Mapping[str, str] | None = None) -> Path:
@@ -541,13 +549,68 @@ def format_weigh_event_results(
     return "\n".join(lines)
 
 
+def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
+    lines = [
+        f"[{record.timestamp}] Truck Profile #{record.truck_id} + "
+        f"Trailer Profile #{record.trailer_id}"
+    ]
+    lines.extend(f"  {line}" for line in _format_axle_check(record.axle_result))
+    axle_verdict = "OVERLOADED" if record.axle_result.any_overloaded else "OK"
+    lines.append(f"  Axle Overload: {axle_verdict}")
+
+    gvwr_verdict = "OVERLOADED" if record.gvwr_result.is_overloaded else "OK"
+    lines.append(
+        f"  Hitched GVWR Overload: {record.gvwr_result.combined_actual} lbs actual "
+        f"vs. {record.gvwr_result.gvwr_rating} lbs rated -> {gvwr_verdict}"
+    )
+
+    if record.gcwr_result is None:
+        lines.append(
+            "  GCWR Overload: not evaluated - no GCWR on file for this Truck Profile."
+        )
+    else:
+        gcwr_verdict = "OVERLOADED" if record.gcwr_result.is_overloaded else "OK"
+        lines.append(
+            f"  GCWR Overload: {record.gcwr_result.combined_actual} lbs actual "
+            f"vs. {record.gcwr_result.gcwr_rating} lbs rated (Unverified Value) "
+            f"-> {gcwr_verdict}"
+        )
+    return lines
+
+
+def format_weigh_event_history(records: Sequence[WeighEventRecord]) -> str:
+    """Render past Weigh Events in chronological order, each showing the
+    Truck+Trailer pairing used and its check results, followed by the legal
+    disclaimer once for the whole listing."""
+    lines = ["=== Weigh Event History ===", ""]
+    for record in records:
+        lines.extend(_format_weigh_event_record(record))
+        lines.append("")
+    lines.append(LEGAL_DISCLAIMER)
+    return "\n".join(lines)
+
+
+def run_weigh_event_history(weigh_event_store: WeighEventStore) -> None:
+    """List past Weigh Events, in chronological order, showing the
+    Truck+Trailer pairing used and each check's pass/fail result."""
+    records = weigh_event_store.list()
+    if not records:
+        print("No Weigh Events recorded yet.")
+        return
+    print(format_weigh_event_history(records))
+
+
 def run_weigh_event(
-    truck_store: TruckStore, trailer_store: TrailerStore, read: ReadFn
+    truck_store: TruckStore,
+    trailer_store: TrailerStore,
+    weigh_event_store: WeighEventStore,
+    read: ReadFn,
+    now: Callable[[], str] = _iso_now,
 ) -> None:
     """Pick a saved Truck Profile + Trailer Profile pairing, type in a
-    Combined Ticket, and report Axle Overload + Hitched GVWR Overload +
-    GCWR Overload (reported as "not evaluated" when the Truck Profile has
-    no GCWR on file)."""
+    Combined Ticket, report Axle Overload + Hitched GVWR Overload + GCWR
+    Overload (reported as "not evaluated" when the Truck Profile has no
+    GCWR on file), and persist the completed Weigh Event to History."""
     trucks = truck_store.list()
     if not trucks:
         print("No Truck Profiles saved yet. Add one with 'truck add' first.")
@@ -574,6 +637,20 @@ def run_weigh_event(
     gcwr_result = check_gcwr_overload(truck, ticket)
 
     print(format_weigh_event_results(axle_result, gvwr_result, gcwr_result))
+
+    assert truck.id is not None
+    assert trailer.id is not None
+    weigh_event_store.save(
+        WeighEventRecord(
+            truck_id=truck.id,
+            trailer_id=trailer.id,
+            ticket=ticket,
+            axle_result=axle_result,
+            gvwr_result=gvwr_result,
+            gcwr_result=gcwr_result,
+            timestamp=now(),
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -622,6 +699,10 @@ def build_parser() -> argparse.ArgumentParser:
             "GCWR Overload"
         ),
     )
+    weigh_event_subparsers.add_parser(
+        "history",
+        help="List past Weigh Events in chronological order",
+    )
 
     return parser
 
@@ -648,4 +729,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     elif args.entity == "trailer" and args.action == "delete":
         run_trailer_delete(SqliteTrailerStore(db_path), input)
     elif args.entity == "weigh-event" and args.action == "run":
-        run_weigh_event(SqliteTruckStore(db_path), SqliteTrailerStore(db_path), input)
+        run_weigh_event(
+            SqliteTruckStore(db_path),
+            SqliteTrailerStore(db_path),
+            SqliteWeighEventStore(db_path),
+            input,
+        )
+    elif args.entity == "weigh-event" and args.action == "history":
+        run_weigh_event_history(SqliteWeighEventStore(db_path))
