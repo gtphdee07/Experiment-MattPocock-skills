@@ -55,6 +55,24 @@ class HitchedGvwrOverloadResult:
         return self.combined_actual > self.gvwr_rating
 
 
+@dataclass(frozen=True)
+class GcwrOverloadResult:
+    """GCWR Overload: the Combined Ticket's Gross Weight compared against the
+    tow vehicle's GCWR (see CONTEXT.md: GCWR Overload). Only ever constructed
+    when the Truck Profile has a GCWR on file - `check_gcwr_overload` returns
+    `None` instead when it doesn't, a distinct "not evaluated" state rather
+    than a silent pass (see ADR 0002). Because GCWR is a manually-typed
+    value with no photo/CAT Scale Ticket backing it, any result here is an
+    Unverified Value (see CONTEXT.md: Unverified Value)."""
+
+    combined_actual: float
+    gcwr_rating: float
+
+    @property
+    def is_overloaded(self) -> bool:
+        return self.combined_actual > self.gcwr_rating
+
+
 def check_axle_overload(
     truck: TruckProfile, trailer: TrailerProfile, ticket: CombinedTicket
 ) -> AxleOverloadResult:
@@ -90,3 +108,15 @@ def check_hitched_gvwr_overload(
     return HitchedGvwrOverloadResult(
         combined_actual=combined_actual, gvwr_rating=truck.gvwr
     )
+
+
+def check_gcwr_overload(
+    truck: TruckProfile, ticket: CombinedTicket
+) -> GcwrOverloadResult | None:
+    """Compare the Combined Ticket's Gross Weight against the tow vehicle's
+    GCWR. GCWR is optional, manual-entry-only on the Truck Profile (see ADR
+    0002), so this returns `None` - "not evaluated" - when the profile has
+    none on file, rather than treating the check as passed."""
+    if truck.gcwr is None:
+        return None
+    return GcwrOverloadResult(combined_actual=ticket.gross, gcwr_rating=truck.gcwr)

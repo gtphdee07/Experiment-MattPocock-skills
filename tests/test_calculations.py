@@ -1,5 +1,6 @@
 from towing_app.calculations import (
     check_axle_overload,
+    check_gcwr_overload,
     check_hitched_gvwr_overload,
 )
 from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
@@ -109,3 +110,61 @@ def test_hitched_gvwr_overload_ignores_trailer_axle_weight() -> None:
     result = check_hitched_gvwr_overload(TRUCK, ticket)
 
     assert result.combined_actual == 14720
+
+
+def test_gcwr_overload_worked_example_is_overloaded() -> None:
+    # TRUCK's GCWR is 32500; the worked-example Gross Weight of 34400
+    # exceeds it.
+    ticket = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
+
+    result = check_gcwr_overload(TRUCK, ticket)
+
+    assert result is not None
+    assert result.combined_actual == 34400
+    assert result.gcwr_rating == 32500
+    assert result.is_overloaded is True
+
+
+def test_gcwr_overload_not_triggered_when_under_gcwr() -> None:
+    ticket = CombinedTicket(steer=5000, drive=8000, trailer_axle=15000, gross=28000)
+
+    result = check_gcwr_overload(TRUCK, ticket)
+
+    assert result is not None
+    assert result.combined_actual == 28000
+    assert result.is_overloaded is False
+
+
+def test_gcwr_overload_exact_match_to_gcwr_is_not_overloaded() -> None:
+    ticket = CombinedTicket(steer=5000, drive=8000, trailer_axle=19500, gross=32500)
+
+    result = check_gcwr_overload(TRUCK, ticket)
+
+    assert result is not None
+    assert result.combined_actual == 32500
+    assert result.is_overloaded is False
+
+
+def test_gcwr_overload_ignores_individual_axle_readings() -> None:
+    # GCWR Overload compares against the Combined Ticket's Gross Weight only
+    # - it must not be recomputed from the individual axle readings.
+    ticket = CombinedTicket(steer=1, drive=1, trailer_axle=1, gross=34400)
+
+    result = check_gcwr_overload(TRUCK, ticket)
+
+    assert result is not None
+    assert result.combined_actual == 34400
+
+
+def test_gcwr_overload_not_evaluated_when_no_gcwr_on_file() -> None:
+    # See CONTEXT.md: GCWR Overload / ADR 0002 - GCWR is optional on the
+    # Truck Profile, so this must be a distinct "not evaluated" state, never
+    # a silent pass.
+    truck_without_gcwr = TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None
+    )
+    ticket = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
+
+    result = check_gcwr_overload(truck_without_gcwr, ticket)
+
+    assert result is None
