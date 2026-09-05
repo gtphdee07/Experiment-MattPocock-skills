@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -7,6 +7,7 @@ class TruckProfile:
     front_gawr: float
     rear_gawr: float
     gcwr: float | None = None
+    id: int | None = field(default=None, compare=False)
 
     def __str__(self) -> str:
         gcwr_display = self.gcwr if self.gcwr is not None else "(not on file)"
@@ -22,6 +23,7 @@ class TrailerProfile:
     gawr: float
     axle_count: int
     uvw: float | None = None
+    id: int | None = field(default=None, compare=False)
 
     def __str__(self) -> str:
         uvw_display = self.uvw if self.uvw is not None else "(not on file)"
