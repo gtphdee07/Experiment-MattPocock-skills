@@ -3,7 +3,13 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from towing_app.models import TrailerProfile, TruckProfile
+from towing_app.calculations import (
+    AxleOverloadResult,
+    HitchedGvwrOverloadResult,
+    check_axle_overload,
+    check_hitched_gvwr_overload,
+)
+from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     SqliteTrailerStore,
     SqliteTruckStore,
@@ -15,6 +21,20 @@ ReadFn = Callable[[str], str]
 
 DEFAULT_DB_PATH = Path.home() / ".towing_app" / "garage.db"
 DB_PATH_ENV_VAR = "TOWING_APP_DB_PATH"
+
+# NOTE: Placeholder legal copy. This wording has NOT been reviewed by a
+# lawyer and must not ship in a paid product until it gets that review.
+LEGAL_DISCLAIMER = (
+    "DISCLAIMER (placeholder - not legal advice, pending legal review): "
+    "This app is a personal reference tool for recreational RV towing only. "
+    "It is not for commercial or for-hire use. Results are estimates based "
+    "on user-entered data and are not a substitute for certified scale "
+    "readings, your vehicle manufacturer's documentation, or advice from a "
+    "qualified professional. The app's authors accept no legal "
+    "responsibility for towing decisions made using this tool - when in "
+    "doubt, consult a weight-distribution/towing expert or your vehicle "
+    "manufacturer before towing."
+)
 
 
 def resolve_db_path(env: Mapping[str, str] | None = None) -> Path:
@@ -32,6 +52,11 @@ def _prompt_until_valid[T](
             return parse(raw)
         except ValueError:
             print(f"'{raw}' is not a valid {label}. Please try again.")
+
+
+def _confirm(read: ReadFn, message: str) -> bool:
+    response = read(message)
+    return response.strip().lower() == "y"
 
 
 def _read_float(read: ReadFn, prompt: str) -> float:
@@ -52,11 +77,12 @@ def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
     gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
     gcwr_display = gcwr if gcwr is not None else "(not provided)"
 
-    confirmation = read(
+    confirmed = _confirm(
+        read,
         f"GVWR: {gvwr} lbs, Front GAWR: {front_gawr} lbs, Rear GAWR: {rear_gawr} lbs, "
-        f"GCWR: {gcwr_display} lbs. Save this Truck Profile? [y/N]: "
+        f"GCWR: {gcwr_display} lbs. Save this Truck Profile? [y/N]: ",
     )
-    if confirmation.strip().lower() != "y":
+    if not confirmed:
         return None
 
     return TruckProfile(
@@ -75,11 +101,12 @@ def collect_trailer_profile(read: ReadFn) -> TrailerProfile | None:
     uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
     uvw_display = uvw if uvw is not None else "(not provided)"
 
-    confirmation = read(
+    confirmed = _confirm(
+        read,
         f"GVWR: {gvwr} lbs, GAWR (each axle): {gawr} lbs, Axle count: {axle_count}, "
-        f"UVW: {uvw_display} lbs. Save this Trailer Profile? [y/N]: "
+        f"UVW: {uvw_display} lbs. Save this Trailer Profile? [y/N]: ",
     )
-    if confirmation.strip().lower() != "y":
+    if not confirmed:
         return None
 
     return TrailerProfile(gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw)
@@ -121,6 +148,129 @@ def run_truck_list(store: TruckStore) -> None:
         print(profile)
 
 
+def select_profile[T](read: ReadFn, profiles: Sequence[T], label: str) -> T:
+    """Print a numbered list of `profiles` and prompt until the user picks a
+    valid one. Assumes `profiles` is non-empty - callers should check first
+    so they can print a more specific "none saved yet" message."""
+    for index, profile in enumerate(profiles, start=1):
+        print(f"{index}. {profile}")
+
+    def parse(raw: str) -> T:
+        selection = int(raw)
+        if not (1 <= selection <= len(profiles)):
+            raise ValueError
+        return profiles[selection - 1]
+
+    prompt = f"Select a {label} by number (1-{len(profiles)}): "
+    return _prompt_until_valid(read, prompt, parse, "selection")
+
+
+def collect_combined_ticket(read: ReadFn) -> CombinedTicket | None:
+    """Manually enter a Combined Ticket: the CAT Scale reading for a Weigh
+    Event where the Tow Vehicle and Trailer were weighed hitched together."""
+    steer = _read_float(read, "Steer Axle weight (lbs): ")
+    drive = _read_float(read, "Drive Axle weight (lbs): ")
+    trailer_axle = _read_float(read, "Trailer Axle weight (lbs): ")
+    gross = _read_float(read, "Gross Weight (lbs): ")
+
+    confirmed = _confirm(
+        read,
+        f"Steer: {steer} lbs, Drive: {drive} lbs, Trailer Axle: {trailer_axle} lbs, "
+        f"Gross: {gross} lbs. Save this Combined Ticket? [y/N]: ",
+    )
+    if not confirmed:
+        return None
+
+    return CombinedTicket(
+        steer=steer, drive=drive, trailer_axle=trailer_axle, gross=gross
+    )
+
+
+def _format_axle_check(check: AxleOverloadResult) -> list[str]:
+    lines = []
+    for result in (check.steer, check.drive, check.trailer):
+        verdict = "OVERLOADED" if result.is_overloaded else "OK"
+        lines.append(
+            f"  {result.axle_name}: {result.actual} lbs actual vs. "
+            f"{result.rating} lbs rated -> {verdict}"
+        )
+    return lines
+
+
+def format_weigh_event_results(
+    axle_result: AxleOverloadResult, gvwr_result: HitchedGvwrOverloadResult
+) -> str:
+    """Render both checks as plain-language results, always followed by the
+    legal disclaimer."""
+    lines = ["=== Weigh Event Results ===", ""]
+
+    lines.append("Axle Overload")
+    lines.append(
+        "  Checks whether any single axle group's actual weight exceeds "
+        "what it's rated to carry (its GAWR)."
+    )
+    lines.extend(_format_axle_check(axle_result))
+    if axle_result.any_overloaded:
+        lines.append("  Result: Axle Overload detected.")
+    else:
+        lines.append("  Result: no Axle Overload detected.")
+    lines.append("")
+
+    lines.append("Hitched GVWR Overload")
+    lines.append(
+        "  Checks whether the tow vehicle's own axle groups (Steer + Drive), "
+        "summed while hitched to the trailer, exceed the tow vehicle's own "
+        "GVWR - this can happen even when neither axle is individually "
+        "overloaded."
+    )
+    verdict = "OVERLOADED" if gvwr_result.is_overloaded else "OK"
+    lines.append(
+        f"  Steer + Drive: {gvwr_result.combined_actual} lbs actual vs. "
+        f"{gvwr_result.gvwr_rating} lbs rated -> {verdict}"
+    )
+    if gvwr_result.is_overloaded:
+        lines.append("  Result: Hitched GVWR Overload detected.")
+    else:
+        lines.append("  Result: no Hitched GVWR Overload detected.")
+    lines.append("")
+
+    lines.append(LEGAL_DISCLAIMER)
+
+    return "\n".join(lines)
+
+
+def run_weigh_event(
+    truck_store: TruckStore, trailer_store: TrailerStore, read: ReadFn
+) -> None:
+    """Pick a saved Truck Profile + Trailer Profile pairing, type in a
+    Combined Ticket, and report Axle Overload + Hitched GVWR Overload."""
+    trucks = truck_store.list()
+    if not trucks:
+        print("No Truck Profiles saved yet. Add one with 'truck add' first.")
+        return
+
+    trailers = trailer_store.list()
+    if not trailers:
+        print("No Trailer Profiles saved yet. Add one with 'trailer add' first.")
+        return
+
+    print("Saved Truck Profiles:")
+    truck = select_profile(read, trucks, "Truck Profile")
+
+    print("Saved Trailer Profiles:")
+    trailer = select_profile(read, trailers, "Trailer Profile")
+
+    ticket = collect_combined_ticket(read)
+    if ticket is None:
+        print("Discarded - Combined Ticket not recorded.")
+        return
+
+    axle_result = check_axle_overload(truck, trailer, ticket)
+    gvwr_result = check_hitched_gvwr_overload(truck, ticket)
+
+    print(format_weigh_event_results(axle_result, gvwr_result))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="towing-app", description="Towing Limit Checker"
@@ -136,6 +286,20 @@ def build_parser() -> argparse.ArgumentParser:
     trailer_subparsers = trailer_parser.add_subparsers(dest="action", required=True)
     trailer_subparsers.add_parser("add", help="Create a Trailer Profile")
     trailer_subparsers.add_parser("list", help="List saved Trailer Profiles")
+
+    weigh_event_parser = subparsers.add_parser(
+        "weigh-event", help="Record and check a Weigh Event"
+    )
+    weigh_event_subparsers = weigh_event_parser.add_subparsers(
+        dest="action", required=True
+    )
+    weigh_event_subparsers.add_parser(
+        "run",
+        help=(
+            "Pick a Truck Profile + Trailer Profile, enter a Combined "
+            "Ticket, and check for Axle Overload / Hitched GVWR Overload"
+        ),
+    )
 
     return parser
 
@@ -153,3 +317,5 @@ def main(argv: Sequence[str] | None = None) -> None:
         run_trailer_add(SqliteTrailerStore(db_path), input)
     elif args.entity == "trailer" and args.action == "list":
         run_trailer_list(SqliteTrailerStore(db_path))
+    elif args.entity == "weigh-event" and args.action == "run":
+        run_weigh_event(SqliteTruckStore(db_path), SqliteTrailerStore(db_path), input)

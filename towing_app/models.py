@@ -29,3 +29,20 @@ class TrailerProfile:
             f"GVWR: {self.gvwr} lb | GAWR (each axle): {self.gawr} lb | "
             f"Axle count: {self.axle_count} | UVW: {uvw_display}"
         )
+
+
+@dataclass(frozen=True)
+class CombinedTicket:
+    """A CAT Scale Ticket for a Weigh Event where the Tow Vehicle and Trailer
+    were weighed hitched together (see CONTEXT.md: Combined Ticket)."""
+
+    steer: float
+    drive: float
+    trailer_axle: float
+    gross: float
+
+    def __str__(self) -> str:
+        return (
+            f"Steer: {self.steer} lb | Drive: {self.drive} lb | "
+            f"Trailer Axle: {self.trailer_axle} lb | Gross: {self.gross} lb"
+        )
