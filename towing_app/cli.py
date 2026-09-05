@@ -11,6 +11,11 @@ from towing_app.calculations import (
     check_axle_overload,
     check_hitched_gvwr_overload,
 )
+from towing_app.field_acquisition import (
+    ClaudeVisionTruckTagFieldSource,
+    FieldSource,
+    FieldSourceUnavailableError,
+)
 from towing_app.models import CombinedTicket, TrailerProfile, TruckProfile
 from towing_app.storage import (
     SqliteTrailerStore,
@@ -117,11 +122,19 @@ def _select_profile[T: _HasId](read: ReadFn, profiles: Sequence[T], prompt: str)
     return next(profile for profile in profiles if profile.id == selected_id)
 
 
-def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
-    gvwr = _read_float(read, "GVWR (lbs): ")
-    front_gawr = _read_float(read, "Front GAWR (lbs): ")
-    rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
-    gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
+def _confirm_truck_profile(
+    read: ReadFn,
+    gvwr: float,
+    front_gawr: float,
+    rear_gawr: float,
+    gcwr: float | None,
+) -> TruckProfile | None:
+    """The single confirm-or-discard gate every Truck Profile passes through.
+
+    Manual entry and photo-based entry both funnel their gathered values
+    through this same prompt before anything is saved - a value's source
+    (typed or OCR-proposed) never skips this step.
+    """
     gcwr_display = gcwr if gcwr is not None else "(not provided)"
 
     confirmed = _confirm(
@@ -171,6 +184,55 @@ def collect_truck_profile_edit(
     return replace(
         current, gvwr=gvwr, front_gawr=front_gawr, rear_gawr=rear_gawr, gcwr=gcwr
     )
+
+
+def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
+    gvwr = _read_float(read, "GVWR (lbs): ")
+    front_gawr = _read_float(read, "Front GAWR (lbs): ")
+    rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
+    gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
+    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
+
+
+def _resolve_truck_field(
+    read: ReadFn, field_source: FieldSource, field: str, prompt: str
+) -> float:
+    proposed = field_source.propose(field)
+    if proposed is None:
+        print(f"Could not read {field} from the photo - enter it manually.")
+        return _read_float(read, prompt)
+    return proposed
+
+
+def collect_truck_profile_from_photo(
+    read: ReadFn, field_source: FieldSource
+) -> TruckProfile | None:
+    """Proposes GVWR/Front GAWR/Rear GAWR from a photo via `field_source`.
+
+    GCWR is never printed on any tag (see ADR 0002), so it is always
+    collected manually here, same as in `collect_truck_profile`. Every
+    proposed value - whether accepted from the photo or filled in manually
+    because extraction couldn't determine it - is confirmed through the same
+    `_confirm_truck_profile` gate manual entry uses.
+    """
+    try:
+        gvwr = _resolve_truck_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        front_gawr = _resolve_truck_field(
+            read, field_source, "front_gawr", "Front GAWR (lbs): "
+        )
+        rear_gawr = _resolve_truck_field(
+            read, field_source, "rear_gawr", "Rear GAWR (lbs): "
+        )
+    except FieldSourceUnavailableError:
+        # The service itself is unreachable, not just this one field - no
+        # point trying the remaining fields against it, and the message
+        # must not imply the photo was the problem (see ADR 0003).
+        print("Couldn't reach the extraction service - enter all values manually.")
+        gvwr = _read_float(read, "GVWR (lbs): ")
+        front_gawr = _read_float(read, "Front GAWR (lbs): ")
+        rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
+    gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
+    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
 
 
 def _read_int(read: ReadFn, prompt: str) -> int:
@@ -236,8 +298,20 @@ def collect_trailer_profile_edit(
     return replace(current, gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw)
 
 
-def run_truck_add(store: TruckStore, read: ReadFn) -> None:
-    profile = collect_truck_profile(read)
+def run_truck_add(
+    store: TruckStore,
+    read: ReadFn,
+    photo_path: Path | None = None,
+    field_source_factory: Callable[
+        [Path], FieldSource
+    ] = ClaudeVisionTruckTagFieldSource,
+) -> None:
+    if photo_path is not None:
+        profile = collect_truck_profile_from_photo(
+            read, field_source_factory(photo_path)
+        )
+    else:
+        profile = collect_truck_profile(read)
     if profile is None:
         print("Discarded - Truck Profile not saved.")
         return
@@ -473,7 +547,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     truck_parser = subparsers.add_parser("truck", help="Manage Truck Profiles")
     truck_subparsers = truck_parser.add_subparsers(dest="action", required=True)
-    truck_subparsers.add_parser("add", help="Create a Truck Profile")
+    truck_add_parser = truck_subparsers.add_parser("add", help="Create a Truck Profile")
+    truck_add_parser.add_argument(
+        "--photo",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a photo of the truck's federal certification label. "
+            "When given, GVWR/Front GAWR/Rear GAWR are proposed from the "
+            "photo instead of typed manually; GCWR is still entered "
+            "manually either way. Every proposed value still requires "
+            "confirmation before saving."
+        ),
+    )
     truck_subparsers.add_parser("list", help="List saved Truck Profiles")
     truck_subparsers.add_parser("edit", help="Edit an existing Truck Profile")
     truck_subparsers.add_parser("delete", help="Delete a Truck Profile")
@@ -508,7 +594,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     db_path = resolve_db_path()
 
     if args.entity == "truck" and args.action == "add":
-        run_truck_add(SqliteTruckStore(db_path), input)
+        run_truck_add(SqliteTruckStore(db_path), input, photo_path=args.photo)
     elif args.entity == "truck" and args.action == "list":
         run_truck_list(SqliteTruckStore(db_path))
     elif args.entity == "truck" and args.action == "edit":
