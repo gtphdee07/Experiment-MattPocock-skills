@@ -49,3 +49,41 @@ def test_delete_removes_profile_across_store_instances(tmp_path: Path) -> None:
     SqliteTruckStore(db_path).delete(first.id)
 
     assert SqliteTruckStore(db_path).list() == [second]
+
+
+# --- Nickname (#12) ----------------------------------------------------------
+
+
+def test_save_and_list_round_trips_nickname(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    profile = TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, nickname="Addie"
+    )
+
+    SqliteTruckStore(db_path).save(profile)
+
+    [saved] = SqliteTruckStore(db_path).list()
+    assert saved.nickname == "Addie"
+
+
+def test_save_and_list_round_trips_no_nickname(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    SqliteTruckStore(db_path).save(
+        TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900)
+    )
+
+    [saved] = SqliteTruckStore(db_path).list()
+    assert saved.nickname is None
+
+
+def test_update_persists_nickname_across_store_instances(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    store = SqliteTruckStore(db_path)
+    store.save(TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900))
+    [saved] = store.list()
+
+    updated = replace(saved, nickname="Addie")
+    SqliteTruckStore(db_path).update(updated)
+
+    [result] = SqliteTruckStore(db_path).list()
+    assert result.nickname == "Addie"

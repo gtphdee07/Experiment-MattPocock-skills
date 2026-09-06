@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1537,3 +1538,129 @@ def test_run_weigh_event_history_no_reused_solo_line_when_solo_ticket_fresh(
 
     output = capsys.readouterr().out
     assert "reused" not in output.lower()
+
+
+# --- Nickname snapshot (#12) -------------------------------------------------
+
+
+def test_run_weigh_event_snapshots_nicknames_at_save_time() -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(replace(TRUCK, nickname="Addie"))
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(replace(TRAILER, nickname="Goose"))
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    [record] = weigh_event_store.list()
+    assert record.truck_nickname == "Addie"
+    assert record.trailer_nickname == "Goose"
+
+
+def test_run_weigh_event_snapshots_computed_default_when_nickname_blank() -> None:
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    [saved_trailer] = trailer_store.list()
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    [record] = weigh_event_store.list()
+    assert record.truck_nickname == f"Truck {saved_truck.id}"
+    assert record.trailer_nickname == f"Trailer {saved_trailer.id}"
+
+
+def test_run_weigh_event_history_shows_nickname_snapshot(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        replace(
+            _make_record(
+                1,
+                2,
+                "2026-09-05T12:00:00+00:00",
+                axle_overloaded=False,
+                gvwr_overloaded=False,
+            ),
+            truck_nickname="Addie",
+            trailer_nickname="Goose",
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Addie" in output
+    assert "Goose" in output
+    assert "Truck Profile #1" not in output
+    assert "Trailer Profile #2" not in output
+
+
+def test_run_weigh_event_history_falls_back_to_id_when_no_nickname_snapshot(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A record persisted before this field existed - `truck_nickname`/
+    # `trailer_nickname` are `None`, not a real Nickname that was never
+    # captured, so the pre-Nickname ID-only display is used instead of a
+    # guess (see `WeighEventRecord`'s docstring).
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Truck Profile #1" in output
+    assert "Trailer Profile #2" in output
+
+
+def test_run_weigh_event_history_keeps_old_nickname_after_profile_renamed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Renaming a Truck Profile after a Weigh Event was already recorded
+    must not change how that past entry renders - the snapshot on the
+    record is independent of the Profile's current state (see CONTEXT.md:
+    Nickname, ADR 0004, and issue #12 user stories 9/10)."""
+    truck_store = InMemoryTruckStore()
+    truck_store.save(replace(TRUCK, nickname="Addie"))
+    [saved_truck] = truck_store.list()
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    # Rename the Truck Profile after the Weigh Event was recorded.
+    truck_store.update(replace(saved_truck, nickname="Big Red"))
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Addie" in output
+    assert "Big Red" not in output

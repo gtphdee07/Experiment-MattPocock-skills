@@ -3,10 +3,18 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class TruckProfile:
+    """`nickname` is a user-editable display name (see CONTEXT.md: Nickname)
+    - `None` when left blank, which callers display as a computed default
+    ("Truck {id}") rather than writing that default back to storage (see
+    ticket #12). Deliberately excluded from `__str__`, which stays limited
+    to the certification-label ratings - callers that want the Nickname
+    alongside those ratings compose it themselves (see `cli._list_with_ids`)."""
+
     gvwr: float
     front_gawr: float
     rear_gawr: float
     gcwr: float | None = None
+    nickname: str | None = None
     id: int | None = field(default=None, compare=False)
 
     def __str__(self) -> str:
@@ -19,10 +27,14 @@ class TruckProfile:
 
 @dataclass(frozen=True)
 class TrailerProfile:
+    """`nickname` mirrors `TruckProfile.nickname` - see that field's
+    docstring (default display: "Trailer {id}")."""
+
     gvwr: float
     gawr: float
     axle_count: int
     uvw: float | None = None
+    nickname: str | None = None
     id: int | None = field(default=None, compare=False)
 
     def __str__(self) -> str:

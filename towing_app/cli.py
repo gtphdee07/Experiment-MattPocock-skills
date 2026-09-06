@@ -46,6 +46,14 @@ class _HasId(Protocol):
     def id(self) -> int | None: ...
 
 
+class _HasNicknameAndId(Protocol):
+    @property
+    def id(self) -> int | None: ...
+
+    @property
+    def nickname(self) -> str | None: ...
+
+
 DEFAULT_DB_PATH = Path.home() / ".towing_app" / "garage.db"
 DB_PATH_ENV_VAR = "TOWING_APP_DB_PATH"
 
@@ -134,9 +142,24 @@ def _read_optional_float_with_default(
     return _prompt_until_valid(read, prompt, parse, "number")
 
 
-def _list_with_ids(profiles: Sequence[_HasId]) -> None:
+def _display_nickname(nickname: str | None, kind: str, profile_id: int | None) -> str:
+    """The Nickname to show for a Truck/Trailer Profile - the stored value,
+    or a default computed live from its ID (e.g. "Truck 3") when it's
+    `None` (see CONTEXT.md: Nickname). This default is only ever computed
+    for display - it is never written back to storage, so leaving the
+    Nickname blank never silently locks in a stored value (see ticket #12).
+    `kind` is "Truck" or "Trailer"."""
+    return nickname if nickname is not None else f"{kind} {profile_id}"
+
+
+def _list_with_ids(profiles: Sequence[_HasNicknameAndId], kind: str) -> None:
+    """Lists Truck/Trailer Profiles for edit/delete selection, leading with
+    each one's Nickname (or computed default) ahead of its ratings - see
+    `_display_nickname`. Selection itself is unchanged: still the typed
+    numeric ID shown in brackets (see `_select_profile`)."""
     for profile in profiles:
-        print(f"[{profile.id}] {profile}")
+        nickname = _display_nickname(profile.nickname, kind, profile.id)
+        print(f"[{profile.id}] {nickname} — {profile}")
 
 
 def _select_profile[T: _HasId](read: ReadFn, profiles: Sequence[T], prompt: str) -> T:
@@ -152,12 +175,16 @@ def _select_profile[T: _HasId](read: ReadFn, profiles: Sequence[T], prompt: str)
     return next(profile for profile in profiles if profile.id == selected_id)
 
 
+NICKNAME_PROMPT = "Nick Name / Reference (optional - press Enter to skip): "
+
+
 def _confirm_truck_profile(
     read: ReadFn,
     gvwr: float,
     front_gawr: float,
     rear_gawr: float,
     gcwr: float | None,
+    nickname: str | None,
 ) -> TruckProfile | None:
     """The single confirm-or-discard gate every Truck Profile passes through.
 
@@ -176,7 +203,11 @@ def _confirm_truck_profile(
         return None
 
     return TruckProfile(
-        gvwr=gvwr, front_gawr=front_gawr, rear_gawr=rear_gawr, gcwr=gcwr
+        gvwr=gvwr,
+        front_gawr=front_gawr,
+        rear_gawr=rear_gawr,
+        gcwr=gcwr,
+        nickname=nickname,
     )
 
 
@@ -203,6 +234,14 @@ def collect_truck_profile_edit(
         current.gcwr,
     )
     gcwr_display = gcwr if gcwr is not None else "(not provided)"
+    nickname_current = (
+        current.nickname if current.nickname is not None else "(not provided)"
+    )
+    nickname = _read_optional_str_with_default(
+        read,
+        f"Nick Name / Reference [{nickname_current}, Enter to keep]: ",
+        current.nickname,
+    )
 
     confirmation = read(
         f"GVWR: {gvwr} lbs, Front GAWR: {front_gawr} lbs, Rear GAWR: {rear_gawr} lbs, "
@@ -212,7 +251,12 @@ def collect_truck_profile_edit(
         return None
 
     return replace(
-        current, gvwr=gvwr, front_gawr=front_gawr, rear_gawr=rear_gawr, gcwr=gcwr
+        current,
+        gvwr=gvwr,
+        front_gawr=front_gawr,
+        rear_gawr=rear_gawr,
+        gcwr=gcwr,
+        nickname=nickname,
     )
 
 
@@ -221,7 +265,8 @@ def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
     front_gawr = _read_float(read, "Front GAWR (lbs): ")
     rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
     gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
-    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
+    nickname = _read_optional_str(read, NICKNAME_PROMPT)
+    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr, nickname)
 
 
 def _resolve_required_field(
@@ -288,7 +333,8 @@ def collect_truck_profile_from_photo(
         front_gawr = _read_float(read, "Front GAWR (lbs): ")
         rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
     gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
-    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr)
+    nickname = _read_optional_str(read, NICKNAME_PROMPT)
+    return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr, nickname)
 
 
 def _read_int(read: ReadFn, prompt: str) -> int:
@@ -301,6 +347,7 @@ def _confirm_trailer_profile(
     gawr: float,
     axle_count: int,
     uvw: float | None,
+    nickname: str | None,
 ) -> TrailerProfile | None:
     """The single confirm-or-discard gate every Trailer Profile passes
     through - see `_confirm_truck_profile` for the rationale, which applies
@@ -317,7 +364,9 @@ def _confirm_trailer_profile(
     if not confirmed:
         return None
 
-    return TrailerProfile(gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw)
+    return TrailerProfile(
+        gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw, nickname=nickname
+    )
 
 
 def _collect_axle_count(
@@ -357,7 +406,8 @@ def collect_trailer_profile(
     gawr = _read_float(read, "GAWR, each axle (lbs): ")
     axle_count = _read_int(read, "Axle count: ")
     uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
-    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw)
+    nickname = _read_optional_str(read, NICKNAME_PROMPT)
+    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw, nickname)
 
 
 def collect_trailer_profile_from_photo(
@@ -395,7 +445,8 @@ def collect_trailer_profile_from_photo(
         gawr = _read_float(read, "GAWR, each axle (lbs): ")
         uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
     axle_count = _collect_axle_count(read, axle_count_source_factory)
-    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw)
+    nickname = _read_optional_str(read, NICKNAME_PROMPT)
+    return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw, nickname)
 
 
 def _read_int_with_default(read: ReadFn, prompt: str, current: int) -> int:
@@ -428,6 +479,14 @@ def collect_trailer_profile_edit(
         current.uvw,
     )
     uvw_display = uvw if uvw is not None else "(not provided)"
+    nickname_current = (
+        current.nickname if current.nickname is not None else "(not provided)"
+    )
+    nickname = _read_optional_str_with_default(
+        read,
+        f"Nick Name / Reference [{nickname_current}, Enter to keep]: ",
+        current.nickname,
+    )
 
     confirmation = read(
         f"GVWR: {gvwr} lbs, GAWR (each axle): {gawr} lbs, Axle count: {axle_count}, "
@@ -436,7 +495,14 @@ def collect_trailer_profile_edit(
     if confirmation.strip().lower() != "y":
         return None
 
-    return replace(current, gvwr=gvwr, gawr=gawr, axle_count=axle_count, uvw=uvw)
+    return replace(
+        current,
+        gvwr=gvwr,
+        gawr=gawr,
+        axle_count=axle_count,
+        uvw=uvw,
+        nickname=nickname,
+    )
 
 
 def run_truck_add(
@@ -465,7 +531,7 @@ def run_truck_edit(store: TruckStore, read: ReadFn) -> None:
     if not profiles:
         print("No Truck Profiles saved yet.")
         return
-    _list_with_ids(profiles)
+    _list_with_ids(profiles, "Truck")
     current = _select_profile(
         read, profiles, "Enter the ID of the Truck Profile to edit: "
     )
@@ -482,11 +548,15 @@ def run_truck_delete(store: TruckStore, read: ReadFn) -> None:
     if not profiles:
         print("No Truck Profiles saved yet.")
         return
-    _list_with_ids(profiles)
+    _list_with_ids(profiles, "Truck")
     selected = _select_profile(
         read, profiles, "Enter the ID of the Truck Profile to delete: "
     )
-    confirmation = read(f"Delete Truck Profile [{selected.id}] {selected}? [y/N]: ")
+    selected_nickname = _display_nickname(selected.nickname, "Truck", selected.id)
+    confirmation = read(
+        f"Delete Truck Profile [{selected.id}] {selected_nickname} — "
+        f"{selected}? [y/N]: "
+    )
     if confirmation.strip().lower() != "y":
         print("Cancelled - Truck Profile not deleted.")
         return
@@ -524,7 +594,7 @@ def run_trailer_edit(store: TrailerStore, read: ReadFn) -> None:
     if not profiles:
         print("No Trailer Profiles saved yet.")
         return
-    _list_with_ids(profiles)
+    _list_with_ids(profiles, "Trailer")
     current = _select_profile(
         read, profiles, "Enter the ID of the Trailer Profile to edit: "
     )
@@ -541,11 +611,15 @@ def run_trailer_delete(store: TrailerStore, read: ReadFn) -> None:
     if not profiles:
         print("No Trailer Profiles saved yet.")
         return
-    _list_with_ids(profiles)
+    _list_with_ids(profiles, "Trailer")
     selected = _select_profile(
         read, profiles, "Enter the ID of the Trailer Profile to delete: "
     )
-    confirmation = read(f"Delete Trailer Profile [{selected.id}] {selected}? [y/N]: ")
+    selected_nickname = _display_nickname(selected.nickname, "Trailer", selected.id)
+    confirmation = read(
+        f"Delete Trailer Profile [{selected.id}] {selected_nickname} — "
+        f"{selected}? [y/N]: "
+    )
     if confirmation.strip().lower() != "y":
         print("Cancelled - Trailer Profile not deleted.")
         return
@@ -559,8 +633,7 @@ def run_trailer_list(store: TrailerStore) -> None:
     if not profiles:
         print("No Trailer Profiles saved yet.")
         return
-    for profile in profiles:
-        print(profile)
+    _list_with_ids(profiles, "Trailer")
 
 
 def run_truck_list(store: TruckStore) -> None:
@@ -568,8 +641,7 @@ def run_truck_list(store: TruckStore) -> None:
     if not profiles:
         print("No Truck Profiles saved yet.")
         return
-    for profile in profiles:
-        print(profile)
+    _list_with_ids(profiles, "Truck")
 
 
 def select_profile[T](read: ReadFn, profiles: Sequence[T], label: str) -> T:
@@ -1011,10 +1083,23 @@ def format_weigh_event_results(
 
 
 def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
-    lines = [
-        f"[{record.timestamp}] Truck Profile #{record.truck_id} + "
-        f"Trailer Profile #{record.trailer_id}"
-    ]
+    # `truck_nickname`/`trailer_nickname` are snapshots of the Nickname (or
+    # its computed default) as it stood when this Weigh Event was saved -
+    # never a live lookup, so a later rename or Profile deletion never
+    # changes how this already-recorded entry renders (see CONTEXT.md:
+    # Nickname, ADR 0004). `None` only for a record saved before this field
+    # existed, which falls back to the original ID-only display.
+    truck_label = (
+        record.truck_nickname
+        if record.truck_nickname is not None
+        else f"Truck Profile #{record.truck_id}"
+    )
+    trailer_label = (
+        record.trailer_nickname
+        if record.trailer_nickname is not None
+        else f"Trailer Profile #{record.trailer_id}"
+    )
+    lines = [f"[{record.timestamp}] {truck_label} + {trailer_label}"]
     lines.extend(f"  {line}" for line in _format_axle_check(record.axle_result))
     axle_verdict = "OVERLOADED" if record.axle_result.any_overloaded else "OK"
     lines.append(f"  Axle Overload: {axle_verdict}")
@@ -1316,6 +1401,13 @@ def run_weigh_event(
         )
     )
 
+    # Snapshot the Nickname (or its computed default) each Profile had right
+    # now, at save time - not a live reference - so a later rename or
+    # deletion never changes how this entry renders in history (see
+    # CONTEXT.md: Nickname, ADR 0004).
+    truck_nickname = _display_nickname(truck.nickname, "Truck", truck.id)
+    trailer_nickname = _display_nickname(trailer.nickname, "Trailer", trailer.id)
+
     weigh_event_store.save(
         WeighEventRecord(
             truck_id=truck.id,
@@ -1326,6 +1418,8 @@ def run_weigh_event(
             gcwr_result=gcwr_result,
             solo_ticket=solo_ticket,
             trailer_gvwr_result=trailer_gvwr_result,
+            truck_nickname=truck_nickname,
+            trailer_nickname=trailer_nickname,
             time_gap_hours=(
                 time_gap_result.gap_hours if time_gap_result is not None else None
             ),
