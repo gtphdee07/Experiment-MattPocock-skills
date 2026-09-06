@@ -122,3 +122,31 @@ def test_save_and_list_round_trips_with_no_reused_solo_from_timestamp() -> None:
 
     [saved] = store.list()
     assert saved.reused_solo_from_timestamp is None
+
+
+def test_save_and_list_round_trips_reused_solo_is_unverified() -> None:
+    store = InMemoryWeighEventStore()
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+        reused_solo_is_unverified=True,
+    )
+
+    store.save(record)
+
+    [saved] = store.list()
+    assert saved.reused_solo_is_unverified is True
+
+
+def test_save_and_list_defaults_reused_solo_is_unverified_to_false() -> None:
+    store = InMemoryWeighEventStore()
+
+    store.save(_record())
+
+    [saved] = store.list()
+    assert saved.reused_solo_is_unverified is False

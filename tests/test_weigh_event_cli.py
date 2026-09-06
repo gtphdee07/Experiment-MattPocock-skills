@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -760,6 +761,37 @@ def test_format_weigh_event_results_never_flags_near_limit_when_actually_overloa
     assert "near" not in output.lower()
 
 
+# --- Trailer GVWR Overload: Unverified Value (#16, see ADR 0006) -----------
+
+
+def test_format_weigh_event_results_labels_unverified_trailer_gvwr() -> None:
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=19680, gvwr_rating=23500, is_unverified=True
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    trailer_section = output.split("Trailer GVWR Overload")[1].split("\n\n")[0]
+    assert "Unverified Value" in trailer_section
+
+
+def test_format_weigh_event_results_does_not_label_trusted_trailer_gvwr_unverified() -> (  # noqa: E501
+    None
+):
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=19680, gvwr_rating=23500, is_unverified=False
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    trailer_section = output.split("Trailer GVWR Overload")[1].split("\n\n")[0]
+    assert "Unverified Value" not in trailer_section
+
+
 # --- Solo Ticket linking, Derived Trailer Weight, Trailer GVWR Overload -----
 # --- and the Time-Gap Warning (Weigh Event) ---------------------------------
 
@@ -1150,12 +1182,13 @@ def test_run_weigh_event_reuse_picks_most_recent_solo_record(
     assert new_record.reused_solo_from_timestamp == "2026-03-01T00:00:00+00:00"
 
 
-def test_run_weigh_event_reuse_reports_change_falls_back_to_unchanged_for_now(
+def test_run_weigh_event_reuse_reports_change_collects_new_gross_weight(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Ticket #16 (worked separately) implements the "yes, something's
-    changed -> type a new figure -> Unverified Value" branch. Until then,
-    answering "yes" here falls back to reusing the weight unchanged."""
+    """Issue #16: reporting a change during reuse prompts for a new Gross
+    Weight, and the resulting Solo Ticket carries that new figure - marking
+    Trailer GVWR Overload for this Weigh Event an Unverified Value (see
+    CONTEXT.md: Unverified Value; ADR 0006)."""
     truck_store = InMemoryTruckStore()
     truck_store.save(TRUCK)
     [saved_truck] = truck_store.list()
@@ -1165,7 +1198,21 @@ def test_run_weigh_event_reuse_reports_change_falls_back_to_unchanged_for_now(
     weigh_event_store = InMemoryWeighEventStore()
     _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
 
-    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "r", "y"])
+    responses = iter(
+        [
+            "1",
+            "1",
+            "",
+            "5640",
+            "9080",
+            "19680",
+            "34400",
+            "y",  # Combined Ticket
+            "r",  # reuse last known Solo weight
+            "y",  # something has changed
+            "15000",  # new Gross Weight
+        ]
+    )
 
     def read(prompt: str) -> str:
         return next(responses)
@@ -1173,11 +1220,47 @@ def test_run_weigh_event_reuse_reports_change_falls_back_to_unchanged_for_now(
     run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
 
     output = capsys.readouterr().out
-    assert "isn't supported yet" in output.lower()
+    assert "Unverified Value" in output
+    # Derived Trailer Weight: 34400 - 15000 = 19400.
+    assert "19400" in output
 
     new_record = weigh_event_store.list()[-1]
-    assert new_record.solo_ticket == PAST_SOLO
+    assert new_record.solo_ticket == replace(PAST_SOLO, gross=15000)
     assert new_record.reused_solo_from_timestamp == PAST_TIMESTAMP
+    assert new_record.reused_solo_is_unverified is True
+    assert new_record.trailer_gvwr_result is not None
+    assert new_record.trailer_gvwr_result.derived_trailer_weight == 19400
+    assert new_record.trailer_gvwr_result.is_unverified is True
+
+
+def test_run_weigh_event_reuse_unchanged_is_never_unverified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unchanged reused weight (#15) is never labeled Unverified."""
+    truck_store = InMemoryTruckStore()
+    truck_store.save(TRUCK)
+    [saved_truck] = truck_store.list()
+    assert saved_truck.id is not None
+    trailer_store = InMemoryTrailerStore()
+    trailer_store.save(TRAILER)
+    weigh_event_store = InMemoryWeighEventStore()
+    _seed_past_solo_record(weigh_event_store, truck_id=saved_truck.id)
+
+    responses = iter(["1", "1", "", "5640", "9080", "19680", "34400", "y", "r", "n"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    run_weigh_event(truck_store, trailer_store, weigh_event_store, read)
+
+    new_record = weigh_event_store.list()[-1]
+    assert new_record.reused_solo_is_unverified is False
+    assert new_record.trailer_gvwr_result is not None
+    assert new_record.trailer_gvwr_result.is_unverified is False
+
+    output = capsys.readouterr().out
+    trailer_section = output.split("Trailer GVWR Overload")[1].split("\n\n")[0]
+    assert "Unverified Value" not in trailer_section
 
 
 def test_run_weigh_event_weigh_now_unchanged_when_reuse_available(
@@ -1270,6 +1353,7 @@ def _make_record(
     trailer_gvwr_result: TrailerGvwrOverloadResult | None = None,
     time_gap_hours: float | None = None,
     reused_solo_from_timestamp: str | None = None,
+    reused_solo_is_unverified: bool = False,
 ) -> WeighEventRecord:
     trailer_actual = 24500 if axle_overloaded else 19680
     return WeighEventRecord(
@@ -1293,6 +1377,7 @@ def _make_record(
         trailer_gvwr_result=trailer_gvwr_result,
         time_gap_hours=time_gap_hours,
         reused_solo_from_timestamp=reused_solo_from_timestamp,
+        reused_solo_is_unverified=reused_solo_is_unverified,
         timestamp=timestamp,
     )
 
@@ -1537,3 +1622,60 @@ def test_run_weigh_event_history_no_reused_solo_line_when_solo_ticket_fresh(
 
     output = capsys.readouterr().out
     assert "reused" not in output.lower()
+
+
+def test_run_weigh_event_history_labels_adjusted_reuse_unverified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Issue #16: a past Weigh Event whose Solo Ticket was an adjusted reuse
+    # must still render the Unverified Value label when reviewed later in
+    # history (see CONTEXT.md: Unverified Value; ADR 0006).
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=15000),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19400, gvwr_rating=23500, is_unverified=True
+            ),
+            reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+            reused_solo_is_unverified=True,
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "Unverified Value" in output
+    assert "adjusted" in output.lower()
+    assert "2026-01-15T09:00:00+00:00" in output
+
+
+def test_run_weigh_event_history_unchanged_reuse_not_labeled_unverified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=19680, gvwr_rating=23500
+            ),
+            reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "unchanged" in output.lower()
+    assert "Unverified Value" not in output

@@ -35,11 +35,20 @@ class WeighEventRecord:
     Ticket.
 
     `reused_solo_from_timestamp` is the original `timestamp` of the past
-    Weigh Event this record's `solo_ticket` was carried forward from,
-    unchanged, when the user chose "reuse last known weight" instead of
-    weighing solo again (see CONTEXT.md: Reused Solo Weight, ADR 0006).
-    `None` for a fresh Solo Ticket or when none was linked - it is never set
-    independently of `solo_ticket`."""
+    Weigh Event this record's `solo_ticket` was carried forward from, when
+    the user chose "reuse last known weight" instead of weighing solo again
+    (see CONTEXT.md: Reused Solo Weight, ADR 0006). Set whether the reused
+    weight was carried forward unchanged or manually adjusted; `None` for a
+    fresh Solo Ticket or when none was linked - it is never set
+    independently of `solo_ticket`.
+
+    `reused_solo_is_unverified` is `True` exactly when the reused weight
+    above was manually adjusted (the user typed a new Gross Weight) rather
+    than reused unchanged - mirrors `trailer_gvwr_result.is_unverified` at
+    the time this record was saved, persisted separately so `weigh-event
+    history` can still render the Unverified Value label without
+    recomputing it (see CONTEXT.md: Unverified Value; ADR 0006). Always
+    `False` when `reused_solo_from_timestamp` is `None`."""
 
     truck_id: int
     trailer_id: int
@@ -52,6 +61,7 @@ class WeighEventRecord:
     trailer_gvwr_result: TrailerGvwrOverloadResult | None = None
     time_gap_hours: float | None = None
     reused_solo_from_timestamp: str | None = None
+    reused_solo_is_unverified: bool = False
     id: int | None = field(default=None, compare=False)
 
 
@@ -299,7 +309,8 @@ class SqliteWeighEventStore:
                     time_gap_hours REAL,
                     reused_solo_from_timestamp TEXT,
                     ticket_timestamp TEXT,
-                    solo_timestamp TEXT
+                    solo_timestamp TEXT,
+                    reused_solo_is_unverified INTEGER
                 )
                 """
             )
@@ -324,9 +335,9 @@ class SqliteWeighEventStore:
                 "gvwr_rating, gcwr_rating, timestamp, combined_reweigh_reference, "
                 "solo_steer, solo_drive, solo_gross, solo_reweigh_reference, "
                 "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
-                "ticket_timestamp, solo_timestamp) "
+                "ticket_timestamp, solo_timestamp, reused_solo_is_unverified) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?)",
+                "?, ?, ?)",
                 (
                     record.truck_id,
                     record.trailer_id,
@@ -350,6 +361,7 @@ class SqliteWeighEventStore:
                     record.reused_solo_from_timestamp,
                     record.ticket.timestamp,
                     solo.timestamp if solo is not None else None,
+                    record.reused_solo_is_unverified,
                 ),
             )
 
@@ -361,7 +373,7 @@ class SqliteWeighEventStore:
                 "gcwr_rating, timestamp, combined_reweigh_reference, solo_steer, "
                 "solo_drive, solo_gross, solo_reweigh_reference, "
                 "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
-                "ticket_timestamp, solo_timestamp "
+                "ticket_timestamp, solo_timestamp, reused_solo_is_unverified "
                 "FROM weigh_events ORDER BY id"
             ).fetchall()
         records = []
@@ -379,10 +391,12 @@ class SqliteWeighEventStore:
                 else None
             )
             trailer_gvwr_rating = row[18]
+            reused_solo_is_unverified = bool(row[23])
             trailer_gvwr_result = (
                 TrailerGvwrOverloadResult(
                     derived_trailer_weight=row[6] - solo_ticket.gross,
                     gvwr_rating=trailer_gvwr_rating,
+                    is_unverified=reused_solo_is_unverified,
                 )
                 if solo_ticket is not None and trailer_gvwr_rating is not None
                 else None
@@ -423,6 +437,7 @@ class SqliteWeighEventStore:
                     trailer_gvwr_result=trailer_gvwr_result,
                     time_gap_hours=row[19],
                     reused_solo_from_timestamp=row[20],
+                    reused_solo_is_unverified=reused_solo_is_unverified,
                     id=row[0],
                 )
             )

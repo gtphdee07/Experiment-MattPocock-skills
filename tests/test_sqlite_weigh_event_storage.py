@@ -149,3 +149,44 @@ def test_save_and_list_round_trips_reused_solo_from_timestamp(tmp_path: Path) ->
 
     [saved] = SqliteWeighEventStore(db_path).list()
     assert saved.reused_solo_from_timestamp == "2026-01-15T09:00:00+00:00"
+
+
+def test_save_and_list_round_trips_reused_solo_is_unverified_true(
+    tmp_path: Path,
+) -> None:
+    # See CONTEXT.md: Unverified Value; ADR 0006 - an adjusted Reused Solo
+    # Weight's Unverified-ness must survive a save/list round trip so
+    # `weigh-event history` can still label it correctly (issue #16).
+    db_path = tmp_path / "garage.db"
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        solo_ticket=SoloTicket(steer=5000, drive=9720, gross=15000),
+        trailer_gvwr_result=TrailerGvwrOverloadResult(
+            derived_trailer_weight=19400, gvwr_rating=23500, is_unverified=True
+        ),
+        reused_solo_from_timestamp="2026-01-15T09:00:00+00:00",
+        reused_solo_is_unverified=True,
+    )
+
+    SqliteWeighEventStore(db_path).save(record)
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.reused_solo_is_unverified is True
+    assert saved.trailer_gvwr_result is not None
+    assert saved.trailer_gvwr_result.is_unverified is True
+
+
+def test_save_and_list_round_trips_reused_solo_is_unverified_false_by_default(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "garage.db"
+
+    SqliteWeighEventStore(db_path).save(_record())
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.reused_solo_is_unverified is False
