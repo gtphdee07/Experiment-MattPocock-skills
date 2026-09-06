@@ -969,8 +969,11 @@ def format_weigh_event_results(
     `trailer_gvwr_result` is `None` whenever there's no linked Solo Ticket
     for this Weigh Event - also reported as "not evaluated" rather than
     hidden (see CONTEXT.md: Trailer GVWR Overload). When it's present and
-    not overloaded but `is_near_limit`, an extra "Near limit" line is shown
-    (see ADR 0006) - never alongside an OVERLOADED verdict. `time_gap_result`
+    `is_unverified` (a manually-adjusted Reused Solo Weight - see ADR 0006;
+    issue #16), it's labeled an Unverified Value the same way GCWR Overload
+    is above. When it's present and not overloaded but `is_near_limit`, an
+    extra "Near limit" line is shown (see ADR 0006) - never alongside an
+    OVERLOADED verdict. `time_gap_result`
     is only present at all when a Solo Ticket was linked - unlike the
     Overload checks it's advisory only and never labeled OVERLOADED/OK (see
     CONTEXT.md: Time-Gap Warning)."""
@@ -1041,10 +1044,20 @@ def format_weigh_event_results(
         )
     else:
         verdict = "OVERLOADED" if trailer_gvwr_result.is_overloaded else "OK"
-        lines.append(
-            f"  Derived Trailer Weight: {trailer_gvwr_result.derived_trailer_weight} "
-            f"lbs vs. {trailer_gvwr_result.gvwr_rating} lbs rated -> {verdict}"
-        )
+        if trailer_gvwr_result.is_unverified:
+            lines.append(
+                "  Derived Trailer Weight: "
+                f"{trailer_gvwr_result.derived_trailer_weight} lbs vs. "
+                f"{trailer_gvwr_result.gvwr_rating} lbs rated (Unverified Value - "
+                f"the reused Solo weight was manually adjusted, not backed by a "
+                f"photo or CAT Scale Ticket) -> {verdict}"
+            )
+        else:
+            lines.append(
+                "  Derived Trailer Weight: "
+                f"{trailer_gvwr_result.derived_trailer_weight} lbs vs. "
+                f"{trailer_gvwr_result.gvwr_rating} lbs rated -> {verdict}"
+            )
         if trailer_gvwr_result.is_overloaded:
             lines.append("  Result: Trailer GVWR Overload detected.")
         else:
@@ -1131,11 +1144,20 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
         trailer_verdict = (
             "OVERLOADED" if record.trailer_gvwr_result.is_overloaded else "OK"
         )
-        lines.append(
-            "  Trailer GVWR Overload: Derived Trailer Weight "
-            f"{record.trailer_gvwr_result.derived_trailer_weight} lbs vs. "
-            f"{record.trailer_gvwr_result.gvwr_rating} lbs rated -> {trailer_verdict}"
-        )
+        if record.trailer_gvwr_result.is_unverified:
+            lines.append(
+                "  Trailer GVWR Overload: Derived Trailer Weight "
+                f"{record.trailer_gvwr_result.derived_trailer_weight} lbs vs. "
+                f"{record.trailer_gvwr_result.gvwr_rating} lbs rated (Unverified "
+                f"Value) -> {trailer_verdict}"
+            )
+        else:
+            lines.append(
+                "  Trailer GVWR Overload: Derived Trailer Weight "
+                f"{record.trailer_gvwr_result.derived_trailer_weight} lbs vs. "
+                f"{record.trailer_gvwr_result.gvwr_rating} lbs rated -> "
+                f"{trailer_verdict}"
+            )
         if record.trailer_gvwr_result.is_near_limit:
             lines.append(
                 "  Near limit: Derived Trailer Weight is within 100 lbs of "
@@ -1145,10 +1167,17 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
             gap = abs(record.time_gap_hours)
             lines.append(f"  Time-Gap: Combined and Solo Tickets {gap} hours apart.")
         if record.reused_solo_from_timestamp is not None:
-            lines.append(
-                "  Solo Ticket: reused, unchanged, from a Weigh Event recorded "
-                f"{record.reused_solo_from_timestamp}."
-            )
+            if record.reused_solo_is_unverified:
+                lines.append(
+                    "  Solo Ticket: reused and manually adjusted from a Weigh "
+                    f"Event recorded {record.reused_solo_from_timestamp} "
+                    "(Unverified Value)."
+                )
+            else:
+                lines.append(
+                    "  Solo Ticket: reused, unchanged, from a Weigh Event recorded "
+                    f"{record.reused_solo_from_timestamp}."
+                )
 
     return lines
 
@@ -1234,23 +1263,25 @@ def _ask_solo_ticket_choice(read: ReadFn, *, reuse_available: bool) -> SoloTicke
 
 def _collect_reused_solo_ticket(
     read: ReadFn, past_record: WeighEventRecord
-) -> tuple[SoloTicket, str]:
+) -> tuple[SoloTicket, str, bool]:
     """Reuse a past Weigh Event's linked Solo Ticket for this Truck Profile
     (see CONTEXT.md: Reused Solo Weight). Shows the past Gross Weight and
     the date it was recorded, then asks whether anything's changed since
     then - no staleness threshold gates this, regardless of how old
     `past_record` is (see ADR 0006).
 
-    Only the "no, nothing's changed" branch is implemented here: the past
-    Solo Ticket is reused exactly as-is, still a trusted reading rather
-    than an Unverified Value (see ADR 0006). The "yes, something's
-    changed" branch - typing a new figure, which becomes an Unverified
-    Value - is issue #16's scope, worked separately; answering "yes" here
-    falls back to "no change" for now so #16 has a clean seam to extend
-    without reshaping this function's return type.
+    "No, nothing's changed" reuses the past Solo Ticket exactly as-is, still
+    a trusted reading rather than an Unverified Value. "Yes, something's
+    changed" prompts for a new Gross Weight on the spot (a plain float, no
+    special validation) and carries the rest of the past Solo Ticket
+    forward unchanged - that figure has no photo or CAT Scale Ticket behind
+    it, so it becomes an Unverified Value (see CONTEXT.md: Unverified
+    Value; ADR 0006; issue #16).
 
-    Returns the reused `SoloTicket` and the original record's `timestamp`,
-    for `WeighEventRecord.reused_solo_from_timestamp`."""
+    Returns the resulting `SoloTicket`, the original record's `timestamp`
+    (for `WeighEventRecord.reused_solo_from_timestamp`), and whether the
+    weight was adjusted (for `WeighEventRecord.reused_solo_is_unverified`
+    and `TrailerGvwrOverloadResult.is_unverified`)."""
     past_solo = past_record.solo_ticket
     assert past_solo is not None
     print(
@@ -1262,10 +1293,13 @@ def _collect_reused_solo_ticket(
         "Has anything changed since then (cargo, fuel, passengers)? [y/N]: ",
     )
     if changed:
-        # TODO(#16): collect a new Gross Weight here and mark the resulting
-        # Trailer GVWR Overload as an Unverified Value (see ADR 0006).
-        print("Adjusting the reused weight isn't supported yet - using it as-is.")
-    return past_solo, past_record.timestamp
+        new_gross = _read_float(
+            read,
+            "New Gross Weight for the Tow Vehicle, lbs (Unverified Value - not "
+            "backed by a photo or CAT Scale Ticket): ",
+        )
+        return replace(past_solo, gross=new_gross), past_record.timestamp, True
+    return past_solo, past_record.timestamp, False
 
 
 def _collect_linked_solo_ticket(
@@ -1276,7 +1310,9 @@ def _collect_linked_solo_ticket(
     field_source_factory: Callable[
         [Path], TextFieldSource
     ] = ClaudeVisionScaleTicketFieldSource,
-) -> tuple[CombinedTicket, SoloTicket | None, TimeGapWarningResult | None, str | None]:
+) -> tuple[
+    CombinedTicket, SoloTicket | None, TimeGapWarningResult | None, str | None, bool
+]:
     """Decide how (or whether) this Weigh Event gets a Solo Ticket: weigh it
     now, reuse the last known weight for this Truck Profile, or skip
     entirely (see CONTEXT.md: Solo Ticket, Reused Solo Weight).
@@ -1288,20 +1324,23 @@ def _collect_linked_solo_ticket(
     relevant when a fresh Solo Ticket might link to it), the resulting Solo
     Ticket (`None` if skipped, declined, or not linked), a Time-Gap Warning
     result (only for a freshly-linked pair - reusing a weight never produces
-    one, see ADR 0006), and the original timestamp a reused weight came from
-    (`None` unless reuse was actually used)."""
+    one, see ADR 0006), the original timestamp a reused weight came from
+    (`None` unless reuse was actually used), and whether that reused weight
+    was manually adjusted rather than reused unchanged (always `False` for
+    a fresh or skipped Solo Ticket - see CONTEXT.md: Unverified Value; ADR
+    0006; issue #16)."""
     last_solo_record = _find_last_solo_ticket_record(past_records, truck_id)
     choice = _ask_solo_ticket_choice(read, reuse_available=last_solo_record is not None)
 
     if choice == "skip":
-        return ticket, None, None, None
+        return ticket, None, None, None, False
 
     if choice == "reuse":
         assert last_solo_record is not None
-        solo, reused_from_timestamp = _collect_reused_solo_ticket(
+        solo, reused_from_timestamp, solo_is_unverified = _collect_reused_solo_ticket(
             read, last_solo_record
         )
-        return ticket, solo, None, reused_from_timestamp
+        return ticket, solo, None, reused_from_timestamp, solo_is_unverified
 
     # A photo-based Combined Ticket may already carry a Reweigh Reference
     # OCR'd straight off the ticket (see `collect_combined_ticket_from_photo`)
@@ -1321,7 +1360,7 @@ def _collect_linked_solo_ticket(
     fresh_solo = collect_solo_ticket_interactive(read, field_source_factory)
     if fresh_solo is None:
         print("Discarded - Solo Ticket not recorded.")
-        return ticket, None, None, None
+        return ticket, None, None, None, False
 
     if not determine_solo_link(read, ticket, fresh_solo):
         print(
@@ -1329,14 +1368,14 @@ def _collect_linked_solo_ticket(
             "and Trailer GVWR Overload will not be evaluated for this Weigh "
             "Event."
         )
-        return ticket, None, None, None
+        return ticket, None, None, None, False
 
     gap_hours = _read_float(
         read,
         "Hours between when the Combined and Solo Tickets were weighed "
         "(0 if the same time): ",
     )
-    return ticket, fresh_solo, check_time_gap(gap_hours), None
+    return ticket, fresh_solo, check_time_gap(gap_hours), None, False
 
 
 def run_weigh_event(
@@ -1380,16 +1419,22 @@ def run_weigh_event(
         return
 
     past_records = weigh_event_store.list()
-    ticket, solo_ticket, time_gap_result, reused_solo_from_timestamp = (
-        _collect_linked_solo_ticket(
-            read, ticket, past_records, truck.id, field_source_factory
-        )
+    (
+        ticket,
+        solo_ticket,
+        time_gap_result,
+        reused_solo_from_timestamp,
+        reused_solo_is_unverified,
+    ) = _collect_linked_solo_ticket(
+        read, ticket, past_records, truck.id, field_source_factory
     )
 
     axle_result = check_axle_overload(truck, trailer, ticket)
     gvwr_result = check_hitched_gvwr_overload(truck, ticket)
     gcwr_result = check_gcwr_overload(truck, ticket)
-    trailer_gvwr_result = check_trailer_gvwr_overload(trailer, ticket, solo_ticket)
+    trailer_gvwr_result = check_trailer_gvwr_overload(
+        trailer, ticket, solo_ticket, solo_is_unverified=reused_solo_is_unverified
+    )
 
     print(
         format_weigh_event_results(
@@ -1424,6 +1469,7 @@ def run_weigh_event(
                 time_gap_result.gap_hours if time_gap_result is not None else None
             ),
             reused_solo_from_timestamp=reused_solo_from_timestamp,
+            reused_solo_is_unverified=reused_solo_is_unverified,
             timestamp=now(),
         )
     )

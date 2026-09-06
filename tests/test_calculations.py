@@ -247,6 +247,44 @@ def test_trailer_gvwr_overload_exact_match_to_gvwr_is_not_overloaded() -> None:
     assert result.is_overloaded is False
 
 
+# --- Trailer GVWR Overload: Unverified Value (#16, see ADR 0006) ------------
+
+
+def test_trailer_gvwr_overload_is_not_unverified_by_default() -> None:
+    # A fresh or reused-unchanged Solo Ticket is a trusted reading - not an
+    # Unverified Value (see ADR 0006).
+    combined = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720)
+
+    result = check_trailer_gvwr_overload(TRAILER, combined, solo)
+
+    assert result is not None
+    assert result.is_unverified is False
+
+
+def test_trailer_gvwr_overload_is_unverified_when_solo_is_unverified() -> None:
+    # When the caller reports the Solo Ticket's weight came from a
+    # manually-adjusted reuse, the resulting Trailer GVWR Overload result is
+    # an Unverified Value (see CONTEXT.md: Unverified Value; ADR 0006).
+    combined = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
+    solo = SoloTicket(steer=5000, drive=9720, gross=14720)
+
+    result = check_trailer_gvwr_overload(
+        TRAILER, combined, solo, solo_is_unverified=True
+    )
+
+    assert result is not None
+    assert result.is_unverified is True
+
+
+def test_trailer_gvwr_overload_result_defaults_to_not_unverified() -> None:
+    # Direct construction (as used elsewhere, e.g. Weigh Event history
+    # reconstruction) defaults to trusted/not-Unverified.
+    result = TrailerGvwrOverloadResult(derived_trailer_weight=19680, gvwr_rating=23500)
+
+    assert result.is_unverified is False
+
+
 # --- Trailer GVWR Overload: near-limit flagging (#14, see ADR 0006) ----------
 
 

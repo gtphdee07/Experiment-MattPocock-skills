@@ -140,12 +140,18 @@ class TrailerGvwrOverloadResult:
     ever constructed when there's a linked Solo Ticket to derive Trailer
     Weight from - `check_trailer_gvwr_overload` returns `None` instead when
     there isn't, the same "not evaluated" shape `check_gcwr_overload` uses
-    (see ADR 0002), though unlike GCWR this is never an Unverified Value:
-    Trailer GVWR is a required field on every saved Trailer Profile, not an
-    optional manually-typed one."""
+    (see ADR 0002).
+
+    `is_unverified` is `True` exactly when the Solo Ticket this result was
+    derived from is a Reused Solo Weight the user manually adjusted (typed a
+    new Gross Weight rather than reusing it unchanged) - identical treatment
+    to how GCWR Overload is always an Unverified Value (see CONTEXT.md:
+    Unverified Value; ADR 0006). A fresh Solo Ticket, or a Reused Solo
+    Weight used unchanged, is a trusted reading and leaves this `False`."""
 
     derived_trailer_weight: float
     gvwr_rating: float
+    is_unverified: bool = False
 
     @property
     def is_overloaded(self) -> bool:
@@ -169,16 +175,26 @@ class TrailerGvwrOverloadResult:
 
 
 def check_trailer_gvwr_overload(
-    trailer: TrailerProfile, combined: CombinedTicket, solo: SoloTicket | None
+    trailer: TrailerProfile,
+    combined: CombinedTicket,
+    solo: SoloTicket | None,
+    *,
+    solo_is_unverified: bool = False,
 ) -> TrailerGvwrOverloadResult | None:
     """Compare Derived Trailer Weight against the Trailer Profile's GVWR.
     Not evaluated - returns `None` - when there's no linked Solo Ticket to
-    derive a Trailer Weight from (see CONTEXT.md: Trailer GVWR Overload)."""
+    derive a Trailer Weight from (see CONTEXT.md: Trailer GVWR Overload).
+
+    `solo_is_unverified` is the caller's signal that `solo`'s Gross Weight
+    came from a manually-adjusted Reused Solo Weight rather than a fresh
+    ticket or an unchanged reuse - it flows straight into the result's
+    `is_unverified` (see CONTEXT.md: Unverified Value; ADR 0006)."""
     if solo is None:
         return None
     return TrailerGvwrOverloadResult(
         derived_trailer_weight=compute_derived_trailer_weight(combined, solo),
         gvwr_rating=trailer.gvwr,
+        is_unverified=solo_is_unverified,
     )
 
 
