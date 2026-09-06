@@ -12,6 +12,7 @@ from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckP
 
 DEFAULT_TIME_GAP_THRESHOLD_HOURS = 4.0
 TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS = 100
+TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS = 300
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,9 @@ class TrailerGvwrOverloadResult:
         """Close to the limit: Derived Trailer Weight is within
         `TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS` lbs under the GVWR rating,
         boundary inclusive (see CONTEXT.md: Trailer GVWR Overload; ADR 0006).
+        Widened to `TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS` lbs under
+        when this result is an Unverified Value - the extra uncertainty in a
+        user-estimated number warrants a wider margin (see ADR 0006).
 
         Never `True` when actually overloaded - being over is reported as
         overloaded, full stop, with no "close" qualifier layered on top,
@@ -169,9 +173,12 @@ class TrailerGvwrOverloadResult:
         over-the-limit side)."""
         if self.is_overloaded:
             return False
-        return (
-            self.gvwr_rating - self.derived_trailer_weight
-        ) <= TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
+        margin = (
+            TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS
+            if self.is_unverified
+            else TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
+        )
+        return (self.gvwr_rating - self.derived_trailer_weight) <= margin
 
 
 def check_trailer_gvwr_overload(
