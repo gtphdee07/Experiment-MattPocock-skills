@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from towing_app.calculations import (
+    TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS,
+    TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS,
     AxleOverloadResult,
     GcwrOverloadResult,
     HitchedGvwrOverloadResult,
@@ -949,6 +951,18 @@ def _format_axle_check(check: AxleOverloadResult) -> list[str]:
     return lines
 
 
+def _trailer_gvwr_near_limit_margin_lbs(result: TrailerGvwrOverloadResult) -> int:
+    """The near-limit margin that actually applies to `result` - the wider
+    `TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS` for an Unverified Value,
+    otherwise the trusted `TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS` (see ADR 0006;
+    issue #17)."""
+    return (
+        TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS
+        if result.is_unverified
+        else TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
+    )
+
+
 def format_weigh_event_results(
     axle_result: AxleOverloadResult,
     gvwr_result: HitchedGvwrOverloadResult,
@@ -1063,8 +1077,9 @@ def format_weigh_event_results(
         else:
             lines.append("  Result: no Trailer GVWR Overload detected.")
             if trailer_gvwr_result.is_near_limit:
+                margin = _trailer_gvwr_near_limit_margin_lbs(trailer_gvwr_result)
                 lines.append(
-                    "  Near limit: Derived Trailer Weight is within 100 lbs "
+                    f"  Near limit: Derived Trailer Weight is within {margin} lbs "
                     "of the Trailer's GVWR."
                 )
     lines.append("")
@@ -1159,8 +1174,9 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
                 f"{trailer_verdict}"
             )
         if record.trailer_gvwr_result.is_near_limit:
+            margin = _trailer_gvwr_near_limit_margin_lbs(record.trailer_gvwr_result)
             lines.append(
-                "  Near limit: Derived Trailer Weight is within 100 lbs of "
+                f"  Near limit: Derived Trailer Weight is within {margin} lbs of "
                 "the Trailer's GVWR."
             )
         if record.time_gap_hours is not None:

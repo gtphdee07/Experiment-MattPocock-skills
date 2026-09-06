@@ -761,6 +761,41 @@ def test_format_weigh_event_results_never_flags_near_limit_when_actually_overloa
     assert "near" not in output.lower()
 
 
+def test_format_weigh_event_results_near_limit_message_says_100_lbs_when_trusted() -> (
+    None
+):
+    # 100 lbs under - trusted (not Unverified) - message must cite the 100 lb
+    # margin that actually triggered the flag (#17).
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23400, gvwr_rating=23500, is_unverified=False
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    assert "within 100 lbs" in output
+    assert "within 300 lbs" not in output
+
+
+def test_format_weigh_event_results_near_limit_message_says_300_lbs_when_unverified() -> (  # noqa: E501
+    None
+):
+    # 200 lbs under - outside the trusted 100 lb margin but within the
+    # widened 300 lb margin an Unverified Value gets - message must cite the
+    # 300 lb margin that actually triggered the flag, not the trusted 100 (#17).
+    trailer_gvwr_result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23300, gvwr_rating=23500, is_unverified=True
+    )
+
+    output = format_weigh_event_results(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    )
+
+    assert "within 300 lbs" in output
+    assert "within 100 lbs" not in output
+
+
 # --- Trailer GVWR Overload: Unverified Value (#16, see ADR 0006) -----------
 
 
@@ -1552,6 +1587,56 @@ def test_run_weigh_event_history_never_flags_near_limit_when_actually_overloaded
     output = capsys.readouterr().out
     assert "OVERLOADED" in output
     assert "near" not in output.lower()
+
+
+def test_run_weigh_event_history_near_limit_message_says_100_lbs_when_trusted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=23400, gvwr_rating=23500, is_unverified=False
+            ),
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "within 100 lbs" in output
+    assert "within 300 lbs" not in output
+
+
+def test_run_weigh_event_history_near_limit_message_says_300_lbs_when_unverified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    weigh_event_store = InMemoryWeighEventStore()
+    weigh_event_store.save(
+        _make_record(
+            1,
+            2,
+            "2026-09-05T12:00:00+00:00",
+            axle_overloaded=False,
+            gvwr_overloaded=False,
+            solo_ticket=SoloTicket(steer=5000, drive=9720, gross=14720),
+            trailer_gvwr_result=TrailerGvwrOverloadResult(
+                derived_trailer_weight=23300, gvwr_rating=23500, is_unverified=True
+            ),
+        )
+    )
+
+    run_weigh_event_history(weigh_event_store)
+
+    output = capsys.readouterr().out
+    assert "within 300 lbs" in output
+    assert "within 100 lbs" not in output
 
 
 def test_run_weigh_event_history_shows_trailer_gvwr_not_evaluated_without_solo(
