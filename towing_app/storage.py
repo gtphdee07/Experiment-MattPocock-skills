@@ -39,7 +39,18 @@ class WeighEventRecord:
     unchanged, when the user chose "reuse last known weight" instead of
     weighing solo again (see CONTEXT.md: Reused Solo Weight, ADR 0006).
     `None` for a fresh Solo Ticket or when none was linked - it is never set
-    independently of `solo_ticket`."""
+    independently of `solo_ticket`.
+
+    `truck_nickname`/`trailer_nickname` snapshot the Truck/Trailer Profile's
+    Nickname (or its computed default, e.g. "Truck 3", if it was blank) as
+    it stood at the moment this Weigh Event was saved - a snapshot, not a
+    live lookup, so a later rename or Profile deletion never changes how an
+    already-recorded history entry renders (see CONTEXT.md: Nickname, ADR
+    0004). Every record saved by `cli.run_weigh_event` populates both with a
+    real string; `None` here is reserved for a record persisted before this
+    field existed (see `SqliteWeighEventStore`'s nullable column), and is
+    rendered with the pre-Nickname fallback ("Truck Profile #{truck_id}")
+    rather than a guess at a Nickname that was never captured."""
 
     truck_id: int
     trailer_id: int
@@ -52,6 +63,8 @@ class WeighEventRecord:
     trailer_gvwr_result: TrailerGvwrOverloadResult | None = None
     time_gap_hours: float | None = None
     reused_solo_from_timestamp: str | None = None
+    truck_nickname: str | None = None
+    trailer_nickname: str | None = None
     id: int | None = field(default=None, compare=False)
 
 
@@ -151,7 +164,8 @@ class SqliteTruckStore:
                     gvwr REAL NOT NULL,
                     front_gawr REAL NOT NULL,
                     rear_gawr REAL NOT NULL,
-                    gcwr REAL
+                    gcwr REAL,
+                    nickname TEXT
                 )
                 """
             )
@@ -162,15 +176,22 @@ class SqliteTruckStore:
     def save(self, profile: TruckProfile) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO truck_profiles (gvwr, front_gawr, rear_gawr, gcwr) "
-                "VALUES (?, ?, ?, ?)",
-                (profile.gvwr, profile.front_gawr, profile.rear_gawr, profile.gcwr),
+                "INSERT INTO truck_profiles "
+                "(gvwr, front_gawr, rear_gawr, gcwr, nickname) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    profile.gvwr,
+                    profile.front_gawr,
+                    profile.rear_gawr,
+                    profile.gcwr,
+                    profile.nickname,
+                ),
             )
 
     def list(self) -> list[TruckProfile]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, gvwr, front_gawr, rear_gawr, gcwr "
+                "SELECT id, gvwr, front_gawr, rear_gawr, gcwr, nickname "
                 "FROM truck_profiles ORDER BY id"
             ).fetchall()
         return [
@@ -179,6 +200,7 @@ class SqliteTruckStore:
                 front_gawr=row[2],
                 rear_gawr=row[3],
                 gcwr=row[4],
+                nickname=row[5],
                 id=row[0],
             )
             for row in rows
@@ -190,13 +212,14 @@ class SqliteTruckStore:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE truck_profiles "
-                "SET gvwr = ?, front_gawr = ?, rear_gawr = ?, gcwr = ? "
+                "SET gvwr = ?, front_gawr = ?, rear_gawr = ?, gcwr = ?, nickname = ? "
                 "WHERE id = ?",
                 (
                     profile.gvwr,
                     profile.front_gawr,
                     profile.rear_gawr,
                     profile.gcwr,
+                    profile.nickname,
                     profile.id,
                 ),
             )
@@ -218,7 +241,8 @@ class SqliteTrailerStore:
                     gvwr REAL NOT NULL,
                     gawr REAL NOT NULL,
                     axle_count INTEGER NOT NULL,
-                    uvw REAL
+                    uvw REAL,
+                    nickname TEXT
                 )
                 """
             )
@@ -229,20 +253,31 @@ class SqliteTrailerStore:
     def save(self, profile: TrailerProfile) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO trailer_profiles (gvwr, gawr, axle_count, uvw) "
-                "VALUES (?, ?, ?, ?)",
-                (profile.gvwr, profile.gawr, profile.axle_count, profile.uvw),
+                "INSERT INTO trailer_profiles (gvwr, gawr, axle_count, uvw, nickname) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    profile.gvwr,
+                    profile.gawr,
+                    profile.axle_count,
+                    profile.uvw,
+                    profile.nickname,
+                ),
             )
 
     def list(self) -> list[TrailerProfile]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, gvwr, gawr, axle_count, uvw "
+                "SELECT id, gvwr, gawr, axle_count, uvw, nickname "
                 "FROM trailer_profiles ORDER BY id"
             ).fetchall()
         return [
             TrailerProfile(
-                gvwr=row[1], gawr=row[2], axle_count=row[3], uvw=row[4], id=row[0]
+                gvwr=row[1],
+                gawr=row[2],
+                axle_count=row[3],
+                uvw=row[4],
+                nickname=row[5],
+                id=row[0],
             )
             for row in rows
         ]
@@ -253,13 +288,14 @@ class SqliteTrailerStore:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE trailer_profiles "
-                "SET gvwr = ?, gawr = ?, axle_count = ?, uvw = ? "
+                "SET gvwr = ?, gawr = ?, axle_count = ?, uvw = ?, nickname = ? "
                 "WHERE id = ?",
                 (
                     profile.gvwr,
                     profile.gawr,
                     profile.axle_count,
                     profile.uvw,
+                    profile.nickname,
                     profile.id,
                 ),
             )
@@ -299,7 +335,9 @@ class SqliteWeighEventStore:
                     time_gap_hours REAL,
                     reused_solo_from_timestamp TEXT,
                     ticket_timestamp TEXT,
-                    solo_timestamp TEXT
+                    solo_timestamp TEXT,
+                    truck_nickname TEXT,
+                    trailer_nickname TEXT
                 )
                 """
             )
@@ -324,9 +362,9 @@ class SqliteWeighEventStore:
                 "gvwr_rating, gcwr_rating, timestamp, combined_reweigh_reference, "
                 "solo_steer, solo_drive, solo_gross, solo_reweigh_reference, "
                 "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
-                "ticket_timestamp, solo_timestamp) "
+                "ticket_timestamp, solo_timestamp, truck_nickname, trailer_nickname) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?)",
+                "?, ?, ?, ?)",
                 (
                     record.truck_id,
                     record.trailer_id,
@@ -350,6 +388,8 @@ class SqliteWeighEventStore:
                     record.reused_solo_from_timestamp,
                     record.ticket.timestamp,
                     solo.timestamp if solo is not None else None,
+                    record.truck_nickname,
+                    record.trailer_nickname,
                 ),
             )
 
@@ -361,7 +401,7 @@ class SqliteWeighEventStore:
                 "gcwr_rating, timestamp, combined_reweigh_reference, solo_steer, "
                 "solo_drive, solo_gross, solo_reweigh_reference, "
                 "trailer_gvwr_rating, time_gap_hours, reused_solo_from_timestamp, "
-                "ticket_timestamp, solo_timestamp "
+                "ticket_timestamp, solo_timestamp, truck_nickname, trailer_nickname "
                 "FROM weigh_events ORDER BY id"
             ).fetchall()
         records = []
@@ -423,6 +463,8 @@ class SqliteWeighEventStore:
                     trailer_gvwr_result=trailer_gvwr_result,
                     time_gap_hours=row[19],
                     reused_solo_from_timestamp=row[20],
+                    truck_nickname=row[23],
+                    trailer_nickname=row[24],
                     id=row[0],
                 )
             )

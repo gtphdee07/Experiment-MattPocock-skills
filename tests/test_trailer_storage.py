@@ -56,3 +56,24 @@ def test_delete_removes_profile_with_matching_id() -> None:
     store.delete(first.id)
 
     assert store.list() == [second]
+
+
+# --- Nickname (#12) ----------------------------------------------------------
+
+
+def test_save_and_list_round_trips_nickname() -> None:
+    store = InMemoryTrailerStore()
+    profile = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, nickname="Goose")
+
+    store.save(profile)
+
+    [saved] = store.list()
+    assert saved.nickname == "Goose"
+
+
+def test_save_and_list_round_trips_no_nickname() -> None:
+    store = InMemoryTrailerStore()
+    store.save(TrailerProfile(gvwr=23500, gawr=8000, axle_count=3))
+
+    [saved] = store.list()
+    assert saved.nickname is None

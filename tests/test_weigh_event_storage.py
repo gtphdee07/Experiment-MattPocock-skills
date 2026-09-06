@@ -122,3 +122,36 @@ def test_save_and_list_round_trips_with_no_reused_solo_from_timestamp() -> None:
 
     [saved] = store.list()
     assert saved.reused_solo_from_timestamp is None
+
+
+# --- Nickname snapshot (#12) --------------------------------------------------
+
+
+def test_save_and_list_round_trips_nickname_snapshots() -> None:
+    store = InMemoryWeighEventStore()
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        truck_nickname="Addie",
+        trailer_nickname="Goose",
+    )
+
+    store.save(record)
+
+    [saved] = store.list()
+    assert saved.truck_nickname == "Addie"
+    assert saved.trailer_nickname == "Goose"
+
+
+def test_save_and_list_round_trips_with_no_nickname_snapshots() -> None:
+    store = InMemoryWeighEventStore()
+
+    store.save(_record())
+
+    [saved] = store.list()
+    assert saved.truck_nickname is None
+    assert saved.trailer_nickname is None

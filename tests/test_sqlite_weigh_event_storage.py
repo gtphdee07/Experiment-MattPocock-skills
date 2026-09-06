@@ -149,3 +149,36 @@ def test_save_and_list_round_trips_reused_solo_from_timestamp(tmp_path: Path) ->
 
     [saved] = SqliteWeighEventStore(db_path).list()
     assert saved.reused_solo_from_timestamp == "2026-01-15T09:00:00+00:00"
+
+
+# --- Nickname snapshot (#12) --------------------------------------------------
+
+
+def test_save_and_list_round_trips_nickname_snapshots(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=2,
+        ticket=TICKET,
+        axle_result=AXLE_RESULT,
+        gvwr_result=GVWR_RESULT,
+        timestamp="2026-09-05T12:00:00+00:00",
+        truck_nickname="Addie",
+        trailer_nickname="Goose",
+    )
+
+    SqliteWeighEventStore(db_path).save(record)
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.truck_nickname == "Addie"
+    assert saved.trailer_nickname == "Goose"
+
+
+def test_save_and_list_round_trips_with_no_nickname_snapshots(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+
+    SqliteWeighEventStore(db_path).save(_record())
+
+    [saved] = SqliteWeighEventStore(db_path).list()
+    assert saved.truck_nickname is None
+    assert saved.trailer_nickname is None
