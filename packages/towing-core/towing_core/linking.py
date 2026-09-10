@@ -1,7 +1,7 @@
 """Pure decision helpers for linking a Solo Ticket to a Weigh Event.
 
 No I/O - these take tickets / records and return a decision. The
-print + interactive-confirm fallback stays in `towing_app.cli`.
+print + interactive-confirm fallback stays in `towing_cli.collect`.
 """
 
 from collections.abc import Sequence
@@ -38,7 +38,7 @@ def reweigh_references_match(combined: CombinedTicket, solo: SoloTicket) -> bool
     case-insensitively (see CONTEXT.md: Reweigh Reference) - CAT Scale's own
     printed field connecting a reweigh to its original ticket.
 
-    This is the pure automatic-link test; `towing_app.cli.determine_solo_link`
+    This is the pure automatic-link test; `towing_cli.collect.determine_solo_link`
     layers the print + manual-confirm fallback on top for the no-match case."""
     combined_ref = combined.reweigh_reference
     solo_ref = solo.reweigh_reference

@@ -1,7 +1,7 @@
 """The Field Acquisition seam: proposing a value for a field, or none.
 
 A `FieldSource` proposes a value for a named field without knowing how the
-caller will use it - the manual-entry path in `towing_app.cli` never uses
+caller will use it - the manual-entry path in `towing_cli` never uses
 this seam at all, but any alternative source (starting with the Claude-vision
 truck tag adapter below) can plug in here. Every proposed value still passes
 through the same confirm-or-edit step manual entry already uses before it is

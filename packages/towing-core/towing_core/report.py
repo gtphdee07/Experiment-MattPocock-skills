@@ -2,8 +2,8 @@
 plain text, and the shared legal disclaimer.
 
 No I/O and no `argparse` - these take result objects / records and return
-strings (or line lists). `towing_app.cli` imports them and does the actual
-printing.
+strings (or line lists). `towing_cli` (the CLI client) imports them and does
+the actual printing.
 """
 
 from collections.abc import Sequence

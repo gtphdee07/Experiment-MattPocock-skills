@@ -39,3 +39,15 @@ Enforced by Ruff — line length, import grouping/sorting, and quote style all l
 - Use the `logging` module for failures and diagnostics — not for a CLI's primary output. A CLI command's user-facing result (the thing the user ran the command to see) goes to `print`/stdout; `logging` is for what went wrong or what happened internally, not what the user asked for.
 - Fail fast: validate at the boundary — **(current)** at CLI input collection, **(FastAPI phase)** via Pydantic — before data reaches business logic or the database.
 - **External dependency calls** (Claude API today; a future manufacturer lookup, payment, or account call): distinguish a *service* failure (the call couldn't complete — bad/missing credentials, network, timeout, rate limit) from a *content* failure (it completed, but couldn't determine one value). Raise a distinct exception for the former; return `None`/a per-field miss for the latter. Never let one degrade into the other's user-facing message. See ADR 0003 — and note its policy (no auto-retry, no idempotency handling) is a v1 baseline, not sufficient once payment/account dependencies land.
+
+## 7. Monorepo layout
+
+- **(current and FastAPI phase)** The repo is a single `uv` **workspace** with a **virtual root** — the root `pyproject.toml` has no `[project]` and no `[build-system]`; it exists to declare `[tool.uv.workspace]` members and hold shared config. Members: `packages/towing-core`, `packages/towing-app`, `apps/cli` (and, from Phase 1, `apps/streamlit`).
+- **Shared tool config lives once, at the root `pyproject.toml`:** `[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]` (with `testpaths` spanning every member). Per-package `pyproject.toml` files carry only `[project]`, `[build-system]`, and their own `[tool.uv.sources]` for workspace deps. One `uv.lock`, one `.venv`; run every gate from the root (`uv run pytest`, `uv run mypy .`, `uv run ruff check .`).
+- **Tier dependency rule — the arrow only points down:**
+  - `towing-core` depends on **nothing** outside the standard library.
+  - `towing-app` may depend on `towing-core` plus third-party adapter libraries (`anthropic`, and later a DB driver / ORM).
+  - `apps/*` depend on `towing-app` (or `towing-core` alone for a stateless surface).
+  - **Nothing depends on `apps/*`.**
+- **`towing-core` must stay import-pure:** no `anthropic`, `sqlite3`, `argparse`, `streamlit`, or any higher-tier package. This is enforced by `packages/towing-core/tests/test_layering.py` (an `ast`-based scan, not a convention), which also keeps `towing_app` out of the client tiers.
+- **Build backend:** every package uses `hatchling`. Each library package ships a `py.typed` marker so `mypy --strict` resolves exported types across the package boundary.
