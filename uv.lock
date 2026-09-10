@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+members = [
+    "towing-app",
+    "towing-core",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -615,6 +621,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "towing-core" },
 ]
 
 [package.metadata]
@@ -625,7 +632,13 @@ dev = [
     { name = "mypy", specifier = ">=1.10" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.16.6" },
+    { name = "towing-core", editable = "packages/towing-core" },
 ]
+
+[[package]]
+name = "towing-core"
+version = "0.1.0"
+source = { editable = "packages/towing-core" }
 
 [[package]]
 name = "truststore"
