@@ -2,14 +2,27 @@ import argparse
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
+from towing_core.calculations import (
+    TimeGapWarningResult,
+    check_axle_overload,
+    check_gcwr_overload,
+    check_hitched_gvwr_overload,
+    check_time_gap,
+    check_trailer_gvwr_overload,
+)
+from towing_core.field_acquisition import (
+    FieldSource,
+    FieldSourceUnavailableError,
+    TextFieldSource,
+)
 from towing_core.linking import (
     _find_last_solo_ticket_record,
     reweigh_references_match,
 )
+from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_core.report import (
     LEGAL_DISCLAIMER,
     _display_nickname,
@@ -19,33 +32,24 @@ from towing_core.report import (
     format_weigh_event_history,
     format_weigh_event_results,
 )
-
-from towing_app.calculations import (
-    TimeGapWarningResult,
-    check_axle_overload,
-    check_gcwr_overload,
-    check_hitched_gvwr_overload,
-    check_time_gap,
-    check_trailer_gvwr_overload,
-)
-from towing_app.field_acquisition import (
-    ClaudeVisionScaleTicketFieldSource,
-    ClaudeVisionTrailerTagFieldSource,
-    ClaudeVisionTruckTagFieldSource,
-    FieldSource,
-    FieldSourceUnavailableError,
-    TextFieldSource,
-    WebAxleCountFieldSource,
-)
-from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
-from towing_app.storage import (
-    SqliteTrailerStore,
-    SqliteTruckStore,
-    SqliteWeighEventStore,
+from towing_core.storage import (
     TrailerStore,
     TruckStore,
     WeighEventRecord,
     WeighEventStore,
+)
+
+from towing_app.clock import iso_now
+from towing_app.field_acquisition import (
+    ClaudeVisionScaleTicketFieldSource,
+    ClaudeVisionTrailerTagFieldSource,
+    ClaudeVisionTruckTagFieldSource,
+    WebAxleCountFieldSource,
+)
+from towing_app.sqlite import (
+    SqliteTrailerStore,
+    SqliteTruckStore,
+    SqliteWeighEventStore,
 )
 
 # Transitional shim (Step 2 of the monorepo refactor): these pure output
@@ -79,10 +83,6 @@ class _HasNicknameAndId(Protocol):
 
 DEFAULT_DB_PATH = Path.home() / ".towing_app" / "garage.db"
 DB_PATH_ENV_VAR = "TOWING_APP_DB_PATH"
-
-
-def _iso_now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def resolve_db_path(env: Mapping[str, str] | None = None) -> Path:
@@ -1098,7 +1098,7 @@ def run_weigh_event(
     trailer_store: TrailerStore,
     weigh_event_store: WeighEventStore,
     read: ReadFn,
-    now: Callable[[], str] = _iso_now,
+    now: Callable[[], str] = iso_now,
     field_source_factory: Callable[
         [Path], TextFieldSource
     ] = ClaudeVisionScaleTicketFieldSource,

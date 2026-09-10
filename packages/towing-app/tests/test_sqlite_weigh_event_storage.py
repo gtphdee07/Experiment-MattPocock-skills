@@ -1,13 +1,14 @@
 from pathlib import Path
 
-from towing_app.calculations import (
+from towing_app.sqlite import SqliteWeighEventStore
+from towing_core.calculations import (
     AxleCheckResult,
     AxleOverloadResult,
     HitchedGvwrOverloadResult,
     TrailerGvwrOverloadResult,
 )
-from towing_app.models import CombinedTicket, SoloTicket
-from towing_app.storage import SqliteWeighEventStore, WeighEventRecord
+from towing_core.models import CombinedTicket, SoloTicket
+from towing_core.storage import WeighEventRecord
 
 TICKET = CombinedTicket(steer=5640, drive=9080, trailer_axle=19680, gross=34400)
 AXLE_RESULT = AxleOverloadResult(

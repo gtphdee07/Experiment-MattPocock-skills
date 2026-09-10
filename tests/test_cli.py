@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from towing_app.cli import (
     DEFAULT_DB_PATH,
     collect_truck_profile,
@@ -12,9 +11,9 @@ from towing_app.cli import (
     run_truck_delete,
     run_truck_edit,
 )
-from towing_app.field_acquisition import FieldSourceUnavailableError
-from towing_app.models import TruckProfile
-from towing_app.storage import InMemoryTruckStore
+from towing_core.field_acquisition import FieldSourceUnavailableError
+from towing_core.models import TruckProfile
+from towing_core.storage import InMemoryTruckStore
 
 
 class _FakeFieldSource:

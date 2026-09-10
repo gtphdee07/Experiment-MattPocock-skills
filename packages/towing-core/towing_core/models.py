@@ -62,7 +62,7 @@ class CombinedTicket:
     manual entry has no source for it (see ADR 0005's Time-Gap entry, which
     still asks for elapsed hours directly rather than deriving it from this
     field - see ADR 0007). This is distinct from `WeighEventRecord.timestamp`
-    in `towing_app/storage.py`, which is when the record was *saved*, not
+    in `towing_app/sqlite.py`, which is when the record was *saved*, not
     when the ticket was physically weighed."""
 
     steer: float

@@ -41,7 +41,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from towing_app.field_acquisition import ClaudeVisionScaleTicketFieldSource
 
 COMBINED_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "cat_ticket_combined.jpg"

@@ -1,3 +1,11 @@
+"""SQLite-backed implementations of the `towing_core.storage` Store ports.
+
+Each class structurally satisfies the matching Protocol in
+`towing_core.storage` (`TruckStore` / `TrailerStore` / `WeighEventStore`)
+without importing it - the compute core stays free of `sqlite3`, and these
+adapters are what the shipped CLI wires in via `cli.main`.
+"""
+
 import sqlite3
 from pathlib import Path
 
@@ -9,28 +17,7 @@ from towing_core.calculations import (
     TrailerGvwrOverloadResult,
 )
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
-from towing_core.storage import (
-    InMemoryTrailerStore,
-    InMemoryTruckStore,
-    InMemoryWeighEventStore,
-    TrailerStore,
-    TruckStore,
-    WeighEventRecord,
-    WeighEventStore,
-)
-
-__all__ = [
-    "InMemoryTrailerStore",
-    "InMemoryTruckStore",
-    "InMemoryWeighEventStore",
-    "SqliteTrailerStore",
-    "SqliteTruckStore",
-    "SqliteWeighEventStore",
-    "TrailerStore",
-    "TruckStore",
-    "WeighEventRecord",
-    "WeighEventStore",
-]
+from towing_core.storage import WeighEventRecord
 
 
 class SqliteTruckStore:

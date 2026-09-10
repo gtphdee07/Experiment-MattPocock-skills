@@ -2,14 +2,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
-from towing_app.calculations import (
-    AxleCheckResult,
-    AxleOverloadResult,
-    GcwrOverloadResult,
-    HitchedGvwrOverloadResult,
-    TrailerGvwrOverloadResult,
-)
 from towing_app.cli import (
     LEGAL_DISCLAIMER,
     collect_combined_ticket,
@@ -24,9 +16,16 @@ from towing_app.cli import (
     run_weigh_event_history,
     select_profile,
 )
-from towing_app.field_acquisition import FieldSourceUnavailableError
-from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
-from towing_app.storage import (
+from towing_core.calculations import (
+    AxleCheckResult,
+    AxleOverloadResult,
+    GcwrOverloadResult,
+    HitchedGvwrOverloadResult,
+    TrailerGvwrOverloadResult,
+)
+from towing_core.field_acquisition import FieldSourceUnavailableError
+from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
+from towing_core.storage import (
     InMemoryTrailerStore,
     InMemoryTruckStore,
     InMemoryWeighEventStore,

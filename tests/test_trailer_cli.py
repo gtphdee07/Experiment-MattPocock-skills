@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from towing_app.cli import (
     collect_trailer_profile,
     collect_trailer_profile_edit,
@@ -10,9 +9,9 @@ from towing_app.cli import (
     run_trailer_delete,
     run_trailer_edit,
 )
-from towing_app.field_acquisition import FieldSourceUnavailableError
-from towing_app.models import TrailerProfile
-from towing_app.storage import InMemoryTrailerStore
+from towing_core.field_acquisition import FieldSourceUnavailableError
+from towing_core.models import TrailerProfile
+from towing_core.storage import InMemoryTrailerStore
 
 
 class _FakeFieldSource:

@@ -17,26 +17,15 @@ import anthropic
 from anthropic.types import MessageParam
 from towing_core.field_acquisition import (
     AxleCountLookupFn,
-    FieldSource,
     FieldSourceUnavailableError,
     MediaType,
-    TextFieldSource,
     VisionCompletionFn,
 )
 
-# Transitional shim (Step 2 of the monorepo refactor): the port types moved to
-# `towing_core.field_acquisition`; re-export them here so existing
-# `towing_app.field_acquisition` importers keep working until Step 3.
 __all__ = [
-    "AxleCountLookupFn",
     "ClaudeVisionScaleTicketFieldSource",
     "ClaudeVisionTrailerTagFieldSource",
     "ClaudeVisionTruckTagFieldSource",
-    "FieldSource",
-    "FieldSourceUnavailableError",
-    "MediaType",
-    "TextFieldSource",
-    "VisionCompletionFn",
     "WebAxleCountFieldSource",
 ]
 

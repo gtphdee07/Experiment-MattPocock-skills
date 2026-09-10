@@ -1,8 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
-from towing_app.models import TrailerProfile
-from towing_app.storage import SqliteTrailerStore
+from towing_app.sqlite import SqliteTrailerStore
+from towing_core.models import TrailerProfile
 
 
 def test_save_and_list_persists_across_store_instances(tmp_path: Path) -> None:
