@@ -12,7 +12,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CORE_DIR = _REPO_ROOT / "packages" / "towing-core" / "towing_core"
 _APP_DIR = _REPO_ROOT / "packages" / "towing-app" / "towing_app"
-_STREAMLIT_DIR = _REPO_ROOT / "apps" / "streamlit" / "towing_streamlit"
+_STREAMLIT_APP_DIR = _REPO_ROOT / "apps" / "streamlit"
 
 # towing_core is the pure, stdlib-only compute tier: it must never reach for a
 # third-party dependency or a higher tier.
@@ -33,9 +33,10 @@ _APP_FORBIDDEN = (
     "towing_cli",
 )
 
-# towing_streamlit is the standalone offline calculator: it may import only
-# streamlit + towing_core (+ stdlib). No anthropic, no persistence, no other
-# client tier (see the plan's Phase 1; ADR 0008).
+# apps/streamlit is the standalone offline calculator (the entry point plus
+# the towing_streamlit package and its tests): it may import only streamlit +
+# towing_core (+ stdlib). No anthropic, no persistence, no other client tier
+# (see the plan's Phase 1; ADR 0008).
 _STREAMLIT_FORBIDDEN = (
     "anthropic",
     "sqlite3",
@@ -86,10 +87,13 @@ def test_towing_app_does_not_import_client_tiers() -> None:
 
 
 def test_towing_streamlit_imports_stay_thin() -> None:
-    assert _STREAMLIT_DIR.is_dir(), (
-        f"expected towing_streamlit package at {_STREAMLIT_DIR}"
+    assert _STREAMLIT_APP_DIR.is_dir(), (
+        f"expected the streamlit app at {_STREAMLIT_APP_DIR}"
     )
-    problems = _violations(_STREAMLIT_DIR, _STREAMLIT_FORBIDDEN)
+    assert (_STREAMLIT_APP_DIR / "streamlit_app.py").is_file(), (
+        "expected the entry point at apps/streamlit/streamlit_app.py"
+    )
+    problems = _violations(_STREAMLIT_APP_DIR, _STREAMLIT_FORBIDDEN)
     assert not problems, "towing_streamlit layering violation(s):\n" + "\n".join(
         problems
     )
