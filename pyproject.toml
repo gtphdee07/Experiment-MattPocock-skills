@@ -15,10 +15,15 @@ testpaths = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# docs/design/ holds Claude Design reference deliverables (a FastAPI + React
+# bundle, a Streamlit main() patch snippet) - illustrative code, not part of
+# any package, and it imports libraries the workspace doesn't install.
+exclude = ['^docs/design/']
 
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+extend-exclude = ["docs/design"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

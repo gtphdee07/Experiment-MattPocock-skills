@@ -222,3 +222,6 @@ __marimo__/
 
 # towing-app development-only database (see CLAUDE.md: Keep development activity off the app's real default data path)
 .dev-data/
+
+# Raw design-deliverable bundles - contents are extracted into docs/design/*; safe to delete locally
+docs/design/_original-deliverables/

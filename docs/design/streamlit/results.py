@@ -87,13 +87,11 @@ def check_box_html(check: EvaluatedCheck) -> str:
     color = STATUS_COLOR[check.status]
     border = STATUS_BORDER[check.status]
     icon = STATUS_ICON[check.status]
-    label = html.escape(check.label)
-    status_word = html.escape(status_label(check.status))
     rows = [
         f'<div style="display:flex;align-items:center;gap:6px">{icon}'
-        f'<span style="font-weight:700;font-size:0.95rem">{label}</span></div>',
+        f'<span style="font-weight:700;font-size:0.95rem">{html.escape(check.label)}</span></div>',
         f'<div style="font-size:0.85rem;font-weight:600;margin-top:0.3rem">'
-        f"{status_word}</div>",
+        f"{html.escape(status_label(check.status))}</div>",
     ]
     if check.actual is not None and check.rating is not None:
         rows.append(
@@ -107,6 +105,6 @@ def check_box_html(check: EvaluatedCheck) -> str:
         )
     return (
         f'<div style="background:{color};color:#ffffff;border-radius:1rem;'
-        f"border:{border};padding:0.7rem 0.85rem;margin-bottom:0.75rem;height:100%;"
+        f'border:{border};padding:0.7rem 0.85rem;margin-bottom:0.75rem;height:100%;'
         f'min-height:7rem">{"".join(rows)}</div>'
     )

@@ -9,7 +9,14 @@ thin ``st.markdown`` shell over ``towing_streamlit.results`` and this logic.
 from towing_core.calculations import TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
 from towing_core.evaluation import OverloadStatus, evaluate_weigh_event
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
-from towing_streamlit.results import STATUS_COLOR, STATUS_LABEL, grid_checks
+from towing_streamlit.results import (
+    STATUS_BORDER,
+    STATUS_COLOR,
+    STATUS_ICON,
+    STATUS_LABEL,
+    check_box_html,
+    grid_checks,
+)
 
 # Same rig shape the compute-tier tests use (test_calculations / test_evaluation).
 TRUCK = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
@@ -73,10 +80,23 @@ def test_time_gap_advisory_only_present_when_hours_supplied() -> None:
     assert with_gap.time_gap_result.exceeds_threshold is True
 
 
-def test_color_and_label_maps_cover_every_status() -> None:
+def test_status_maps_cover_every_status() -> None:
+    # check_box_html indexes all four maps by status - a missing entry would be
+    # a runtime KeyError in the rendered app, so guard every one here.
     for status in OverloadStatus:
         assert status in STATUS_COLOR
         assert status in STATUS_LABEL
+        assert status in STATUS_BORDER
+        assert status in STATUS_ICON
+
+
+def test_check_box_html_renders_for_every_status() -> None:
+    ev = evaluate_weigh_event(TRUCK_NO_GCWR, TRAILER, COMBINED, SOLO)
+    for check in grid_checks(ev):
+        box = check_box_html(check)
+        assert STATUS_COLOR[check.status] in box
+        assert STATUS_LABEL[check.status] in box
+        assert box.startswith("<div") and box.rstrip().endswith("</div>")
 
 
 def test_grid_checks_is_the_six_boxes_in_display_order() -> None:
