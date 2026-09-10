@@ -1,21 +1,11 @@
-[project]
-name = "towing-app"
-version = "0.1.0"
-description = "Towing Limit Checker: garage, weigh events, and overload checks"
-requires-python = ">=3.12"
-dependencies = [
-    "anthropic>=1.4.0",
-]
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-include = ["towing_app*"]
+[tool.uv.sources]
+towing-core = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["packages/towing-core/tests", "packages/towing-app/tests", "apps/cli/tests"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -27,6 +17,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["towing_core", "towing_app", "towing_cli", "towing_streamlit"]
 
 [dependency-groups]
 dev = [

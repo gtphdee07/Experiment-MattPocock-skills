@@ -1,0 +1,10 @@
+[project]
+name = "towing-core"
+version = "0.1.0"
+description = "Towing Limit Checker: dependency-free compute core (models, calculations, rig evaluation, storage & field-source ports)"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

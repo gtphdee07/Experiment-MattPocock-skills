@@ -57,6 +57,17 @@ The saved specs for one Tow Vehicle or Trailer in the Garage: certification-labe
 A user-editable display name for a Truck Profile or Trailer Profile — e.g. "Addie", "Goose", or a CDL-style truck number. Set at creation (optional) or during a later edit; when left blank, defaults to a name derived from the Profile's database ID (e.g. "Truck 3"). Not required to be unique. Used everywhere a Profile is shown to the user — the database ID itself is never surfaced as the primary way to refer to a Profile.
 _Avoid_: Reference, Unit Number, Truck Number.
 
+**Rig**:
+A specific Tow Vehicle and Trailer pairing under evaluation.
+_Avoid_: combo, setup.
+
+**Rig Evaluation**:
+The outcome of running all six overload comparisons for one Weigh Event together (Steer / Drive / Trailer Axle, Hitched GVWR, GCWR, Trailer GVWR) — each carrying its actual weight, its rating, and an Overload Status — plus the advisory Time-Gap Warning.
+
+**Overload Status**:
+The state one comparison is in: `Pass`, `Near Limit`, `Fail`, or `Not Evaluated`. `Near Limit` currently applies only to Trailer GVWR Overload (see ADR 0006); `Not Evaluated` only to GCWR Overload (no GCWR on file) and Trailer GVWR Overload (no Solo Ticket).
+_Avoid_: verdict, severity, RAG.
+
 **Axle Overload**:
 A single axle group's actual weight (from a CAT Scale Ticket) exceeds its GAWR.
 
@@ -75,3 +86,7 @@ A non-blocking, advisory warning shown when a linked Combined+Solo Ticket pair's
 **Unverified Value**:
 A number entered manually with no photo or CAT Scale Ticket backing it — most commonly GCWR, or a Reused Solo Weight the user has adjusted. Any check depending on one is labeled distinctly in output from checks backed by an OCR'd tag or Ticket.
 _Avoid_: manual value, self-reported value.
+
+## Code layout
+
+The code is one `uv` workspace with two library tiers and its client apps. `towing-core` (`packages/towing-core`) is the compute tier — domain models, the overload calculations, Rig Evaluation, and the storage / field-acquisition ports with in-memory implementations; it depends on nothing outside the standard library. `towing-app` (`packages/towing-app`) is the application-services tier — Weigh Event orchestration, persistence coordination, and the concrete SQLite and Claude-vision adapters. The workspace members are `packages/towing-core`, `packages/towing-app`, `apps/cli` (the interactive client), and the future `apps/streamlit` calculator (compute tier only). ADR 0008 records the tier split and the workspace; ADR 0009 records why the interactive review/confirm/retry flows stay in the frontends rather than the shared tiers. The pre-existing CLI-flow test suite (`apps/cli/tests/`) is the behavior-invariance safety net for that extraction.

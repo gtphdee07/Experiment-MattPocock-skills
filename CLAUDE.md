@@ -24,7 +24,7 @@ This rule needs to be restated explicitly by name when briefing a sub-agent for 
 
 ### Keep development activity off the app's real default data path
 
-`towing_app`'s default database lives at `~/.towing_app/garage.db` (via `resolve_db_path` in `towing_app/cli.py`) — that's the correct, conventional location for the *shipped* CLI's real user data, and should not change. But every manual CLI invocation or smoke test run during development (by a human or an agent, directly via `towing-app ...`/`uv run ...`, not through pytest) must instead point at a project-local path, so development never touches real data:
+The app's default database lives at `~/.towing_app/garage.db` (via `resolve_db_path` in `apps/cli/towing_cli/cli.py`) — that's the correct, conventional location for the *shipped* CLI's real user data, and should not change. But every manual CLI invocation or smoke test run during development (by a human or an agent, directly via `towing-app ...`/`uv run ...`, not through pytest) must instead point at a project-local path, so development never touches real data:
 
 ```
 export TOWING_APP_DB_PATH="$(pwd)/.dev-data/garage.db"   # bash

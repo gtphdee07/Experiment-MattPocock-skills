@@ -1,0 +1,17 @@
+[project]
+name = "towing-cli"
+version = "0.1.0"
+description = "Towing Limit Checker: interactive command-line client"
+requires-python = ">=3.12"
+dependencies = ["towing-app"]
+
+[project.scripts]
+towing-app = "towing_cli.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+towing-app = { workspace = true }
+towing-core = { workspace = true }
