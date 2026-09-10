@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
 from towing_cli.cli import (
     LEGAL_DISCLAIMER,
     collect_combined_ticket,

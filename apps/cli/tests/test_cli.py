@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from towing_cli.cli import (
     DEFAULT_DB_PATH,
     collect_truck_profile,

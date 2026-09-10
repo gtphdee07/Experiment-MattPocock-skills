@@ -3,6 +3,7 @@ from pathlib import Path
 import anthropic
 import httpx2
 import pytest
+
 from towing_app.field_acquisition import (
     ClaudeVisionScaleTicketFieldSource,
     ClaudeVisionTrailerTagFieldSource,

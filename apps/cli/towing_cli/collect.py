@@ -19,6 +19,21 @@ from towing_app.field_acquisition import (
     ClaudeVisionScaleTicketFieldSource,
     WebAxleCountFieldSource,
 )
+from towing_cli.prompt import (
+    NICKNAME_PROMPT,
+    ReadFn,
+    _confirm,
+    _prompt_until_valid,
+    _read_float,
+    _read_float_with_default,
+    _read_int,
+    _read_int_with_default,
+    _read_optional_float,
+    _read_optional_float_with_default,
+    _read_optional_str,
+    _read_optional_str_with_default,
+    _read_photo_path,
+)
 from towing_core.calculations import (
     TimeGapWarningResult,
     check_time_gap,
@@ -35,22 +50,6 @@ from towing_core.linking import (
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_core.report import _display_nickname
 from towing_core.storage import WeighEventRecord
-
-from towing_cli.prompt import (
-    NICKNAME_PROMPT,
-    ReadFn,
-    _confirm,
-    _prompt_until_valid,
-    _read_float,
-    _read_float_with_default,
-    _read_int,
-    _read_int_with_default,
-    _read_optional_float,
-    _read_optional_float_with_default,
-    _read_optional_str,
-    _read_optional_str_with_default,
-    _read_photo_path,
-)
 
 
 class _HasId(Protocol):

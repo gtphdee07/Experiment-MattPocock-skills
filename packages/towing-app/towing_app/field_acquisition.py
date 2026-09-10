@@ -15,6 +15,7 @@ from pathlib import Path
 
 import anthropic
 from anthropic.types import MessageParam
+
 from towing_core.field_acquisition import (
     AxleCountLookupFn,
     FieldSourceUnavailableError,

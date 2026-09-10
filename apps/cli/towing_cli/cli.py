@@ -27,22 +27,6 @@ from towing_app.sqlite import (
     SqliteTruckStore,
     SqliteWeighEventStore,
 )
-from towing_core.field_acquisition import FieldSource, TextFieldSource
-from towing_core.report import (
-    LEGAL_DISCLAIMER,
-    _display_nickname,
-    _format_axle_check,
-    _format_weigh_event_record,
-    _trailer_gvwr_near_limit_margin_lbs,
-    format_weigh_event_history,
-    format_weigh_event_results,
-)
-from towing_core.storage import (
-    TrailerStore,
-    TruckStore,
-    WeighEventStore,
-)
-
 from towing_cli.collect import (
     _collect_linked_solo_ticket,
     _list_with_ids,
@@ -63,6 +47,21 @@ from towing_cli.collect import (
     select_profile,
 )
 from towing_cli.prompt import ReadFn
+from towing_core.field_acquisition import FieldSource, TextFieldSource
+from towing_core.report import (
+    LEGAL_DISCLAIMER,
+    _display_nickname,
+    _format_axle_check,
+    _format_weigh_event_record,
+    _trailer_gvwr_near_limit_margin_lbs,
+    format_weigh_event_history,
+    format_weigh_event_results,
+)
+from towing_core.storage import (
+    TrailerStore,
+    TruckStore,
+    WeighEventStore,
+)
 
 # Explicit re-exports: these live in `towing_cli.collect` / `towing_core
 # .report` now, but the moved CLI test files and any external importer still

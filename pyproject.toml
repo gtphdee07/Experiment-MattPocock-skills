@@ -18,6 +18,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["towing_core", "towing_app", "towing_cli", "towing_streamlit"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

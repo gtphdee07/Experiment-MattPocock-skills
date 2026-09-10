@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 import pytest
+
 from towing_app.field_acquisition import ClaudeVisionTrailerTagFieldSource
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "trailer_tag_goose.jpg"
