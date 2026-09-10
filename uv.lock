@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "towing-app",
+    "towing-cli",
     "towing-core",
 ]
 
@@ -629,6 +630,17 @@ requires-dist = [
     { name = "anthropic", specifier = ">=1.4.0" },
     { name = "towing-core", editable = "packages/towing-core" },
 ]
+
+[[package]]
+name = "towing-cli"
+version = "0.1.0"
+source = { editable = "apps/cli" }
+dependencies = [
+    { name = "towing-app" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "towing-app", editable = "packages/towing-app" }]
 
 [[package]]
 name = "towing-core"

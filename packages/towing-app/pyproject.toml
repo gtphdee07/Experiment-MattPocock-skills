@@ -1,12 +1,9 @@
 [project]
 name = "towing-app"
 version = "0.1.0"
-description = "Towing Limit Checker: application-services tier (garage/weigh-event orchestration, SQLite stores, Claude-vision adapters) + CLI"
+description = "Towing Limit Checker: application-services tier (garage/weigh-event orchestration, SQLite stores, Claude-vision adapters)"
 requires-python = ">=3.12"
 dependencies = ["anthropic>=1.4.0", "towing-core"]
-
-[project.scripts]
-towing-app = "towing_app.cli:main"
 
 [build-system]
 requires = ["hatchling"]

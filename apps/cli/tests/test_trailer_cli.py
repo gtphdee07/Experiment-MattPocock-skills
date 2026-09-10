@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from towing_app.cli import (
+from towing_cli.cli import (
     collect_trailer_profile,
     collect_trailer_profile_edit,
     collect_trailer_profile_from_photo,

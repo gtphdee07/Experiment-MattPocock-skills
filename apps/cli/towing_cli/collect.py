@@ -1,17 +1,27 @@
-import argparse
-import os
-from collections.abc import Callable, Mapping, Sequence
+"""Interactive value-gathering for the CLI: turn a `read` callable (real
+`input`, or a test fake) into confirmed domain objects - Truck/Trailer
+Profiles and Combined/Solo Tickets - by manual entry or photo-assisted
+extraction.
+
+No `argparse`, no persistence: these functions only prompt, propose, and
+confirm. Every function that writes progress/fallback messages does so
+through an injected `emit` (default `print`), so the shipped CLI behavior is
+byte-identical to printing. The concrete `ClaudeVision*` / `WebAxleCount*`
+field sources appear here only as default factory arguments.
+"""
+
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal, Protocol
 
+from towing_app.field_acquisition import (
+    ClaudeVisionScaleTicketFieldSource,
+    WebAxleCountFieldSource,
+)
 from towing_core.calculations import (
     TimeGapWarningResult,
-    check_axle_overload,
-    check_gcwr_overload,
-    check_hitched_gvwr_overload,
     check_time_gap,
-    check_trailer_gvwr_overload,
 )
 from towing_core.field_acquisition import (
     FieldSource,
@@ -23,49 +33,24 @@ from towing_core.linking import (
     reweigh_references_match,
 )
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
-from towing_core.report import (
-    LEGAL_DISCLAIMER,
-    _display_nickname,
-    _format_axle_check,
-    _format_weigh_event_record,
-    _trailer_gvwr_near_limit_margin_lbs,
-    format_weigh_event_history,
-    format_weigh_event_results,
-)
-from towing_core.storage import (
-    TrailerStore,
-    TruckStore,
-    WeighEventRecord,
-    WeighEventStore,
-)
+from towing_core.report import _display_nickname
+from towing_core.storage import WeighEventRecord
 
-from towing_app.clock import iso_now
-from towing_app.field_acquisition import (
-    ClaudeVisionScaleTicketFieldSource,
-    ClaudeVisionTrailerTagFieldSource,
-    ClaudeVisionTruckTagFieldSource,
-    WebAxleCountFieldSource,
+from towing_cli.prompt import (
+    NICKNAME_PROMPT,
+    ReadFn,
+    _confirm,
+    _prompt_until_valid,
+    _read_float,
+    _read_float_with_default,
+    _read_int,
+    _read_int_with_default,
+    _read_optional_float,
+    _read_optional_float_with_default,
+    _read_optional_str,
+    _read_optional_str_with_default,
+    _read_photo_path,
 )
-from towing_app.sqlite import (
-    SqliteTrailerStore,
-    SqliteTruckStore,
-    SqliteWeighEventStore,
-)
-
-# Transitional shim (Step 2 of the monorepo refactor): these pure output
-# helpers moved to `towing_core.report`; re-export them from `towing_app.cli`
-# so existing importers and tests keep working until Step 3.
-__all__ = [
-    "LEGAL_DISCLAIMER",
-    "_display_nickname",
-    "_format_axle_check",
-    "_format_weigh_event_record",
-    "_trailer_gvwr_near_limit_margin_lbs",
-    "format_weigh_event_history",
-    "format_weigh_event_results",
-]
-
-ReadFn = Callable[[str], str]
 
 
 class _HasId(Protocol):
@@ -81,84 +66,18 @@ class _HasNicknameAndId(Protocol):
     def nickname(self) -> str | None: ...
 
 
-DEFAULT_DB_PATH = Path.home() / ".towing_app" / "garage.db"
-DB_PATH_ENV_VAR = "TOWING_APP_DB_PATH"
-
-
-def resolve_db_path(env: Mapping[str, str] | None = None) -> Path:
-    env = env if env is not None else os.environ
-    override = env.get(DB_PATH_ENV_VAR)
-    return Path(override) if override else DEFAULT_DB_PATH
-
-
-def _prompt_until_valid[T](
-    read: ReadFn, prompt: str, parse: Callable[[str], T], label: str
-) -> T:
-    while True:
-        raw = read(prompt)
-        try:
-            return parse(raw)
-        except ValueError:
-            print(f"'{raw}' is not a valid {label}. Please try again.")
-
-
-def _confirm(read: ReadFn, message: str) -> bool:
-    response = read(message)
-    return response.strip().lower() == "y"
-
-
-def _read_float(read: ReadFn, prompt: str) -> float:
-    return _prompt_until_valid(read, prompt, float, "number")
-
-
-def _read_optional_float(read: ReadFn, prompt: str) -> float | None:
-    def parse(raw: str) -> float | None:
-        return None if not raw.strip() else float(raw)
-
-    return _prompt_until_valid(read, prompt, parse, "number")
-
-
-def _read_optional_str(read: ReadFn, prompt: str) -> str | None:
-    stripped = read(prompt).strip()
-    return stripped if stripped else None
-
-
-def _read_optional_str_with_default(
-    read: ReadFn, prompt: str, current: str | None
-) -> str | None:
-    stripped = read(prompt).strip()
-    return stripped if stripped else current
-
-
-def _read_float_with_default(read: ReadFn, prompt: str, current: float) -> float:
-    def parse(raw: str) -> float:
-        return current if not raw.strip() else float(raw)
-
-    return _prompt_until_valid(read, prompt, parse, "number")
-
-
-def _read_optional_float_with_default(
-    read: ReadFn, prompt: str, current: float | None
-) -> float | None:
-    def parse(raw: str) -> float | None:
-        stripped = raw.strip()
-        if not stripped:
-            return current
-        if stripped.lower() == "none":
-            return None
-        return float(stripped)
-
-    return _prompt_until_valid(read, prompt, parse, "number")
-
-
-def _list_with_ids(profiles: Sequence[_HasNicknameAndId], kind: str) -> None:
+def _list_with_ids(
+    profiles: Sequence[_HasNicknameAndId],
+    kind: str,
+    emit: Callable[[str], None] = print,
+) -> None:
     """Lists Truck/Trailer Profiles for edit/delete selection, leading with
     each one's Nickname (or computed default) ahead of its ratings - see
     `_display_nickname`. Selection itself is unchanged: still the typed
     numeric ID shown in brackets (see `_select_profile`)."""
     for profile in profiles:
         nickname = _display_nickname(profile.nickname, kind, profile.id)
-        print(f"[{profile.id}] {nickname} — {profile}")
+        emit(f"[{profile.id}] {nickname} — {profile}")
 
 
 def _select_profile[T: _HasId](read: ReadFn, profiles: Sequence[T], prompt: str) -> T:
@@ -172,9 +91,6 @@ def _select_profile[T: _HasId](read: ReadFn, profiles: Sequence[T], prompt: str)
 
     selected_id = _prompt_until_valid(read, prompt, parse, "ID")
     return next(profile for profile in profiles if profile.id == selected_id)
-
-
-NICKNAME_PROMPT = "Nick Name / Reference (optional - press Enter to skip): "
 
 
 def _confirm_truck_profile(
@@ -269,21 +185,29 @@ def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
 
 
 def _resolve_required_field(
-    read: ReadFn, field_source: FieldSource, field: str, prompt: str
+    read: ReadFn,
+    field_source: FieldSource,
+    field: str,
+    prompt: str,
+    emit: Callable[[str], None] = print,
 ) -> float:
     proposed = field_source.propose(field)
     if proposed is None:
-        print(f"Could not read {field} from the photo - enter it manually.")
+        emit(f"Could not read {field} from the photo - enter it manually.")
         return _read_float(read, prompt)
     return proposed
 
 
 def _resolve_optional_field(
-    read: ReadFn, field_source: FieldSource, field: str, prompt: str
+    read: ReadFn,
+    field_source: FieldSource,
+    field: str,
+    prompt: str,
+    emit: Callable[[str], None] = print,
 ) -> float | None:
     proposed = field_source.propose(field)
     if proposed is None:
-        print(
+        emit(
             f"Could not read {field} from the photo - enter it manually, "
             "or press Enter to skip."
         )
@@ -292,11 +216,15 @@ def _resolve_optional_field(
 
 
 def _resolve_optional_text_field(
-    read: ReadFn, field_source: TextFieldSource, field: str, prompt: str
+    read: ReadFn,
+    field_source: TextFieldSource,
+    field: str,
+    prompt: str,
+    emit: Callable[[str], None] = print,
 ) -> str | None:
     proposed = field_source.propose_text(field)
     if proposed is None:
-        print(
+        emit(
             f"Could not read {field} from the photo - enter it manually, "
             "or press Enter to skip."
         )
@@ -305,7 +233,9 @@ def _resolve_optional_text_field(
 
 
 def collect_truck_profile_from_photo(
-    read: ReadFn, field_source: FieldSource
+    read: ReadFn,
+    field_source: FieldSource,
+    emit: Callable[[str], None] = print,
 ) -> TruckProfile | None:
     """Proposes GVWR/Front GAWR/Rear GAWR from a photo via `field_source`.
 
@@ -316,28 +246,24 @@ def collect_truck_profile_from_photo(
     `_confirm_truck_profile` gate manual entry uses.
     """
     try:
-        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ", emit)
         front_gawr = _resolve_required_field(
-            read, field_source, "front_gawr", "Front GAWR (lbs): "
+            read, field_source, "front_gawr", "Front GAWR (lbs): ", emit
         )
         rear_gawr = _resolve_required_field(
-            read, field_source, "rear_gawr", "Rear GAWR (lbs): "
+            read, field_source, "rear_gawr", "Rear GAWR (lbs): ", emit
         )
     except FieldSourceUnavailableError:
         # The service itself is unreachable, not just this one field - no
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
-        print("Couldn't reach the extraction service - enter all values manually.")
+        emit("Couldn't reach the extraction service - enter all values manually.")
         gvwr = _read_float(read, "GVWR (lbs): ")
         front_gawr = _read_float(read, "Front GAWR (lbs): ")
         rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
     gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr, nickname)
-
-
-def _read_int(read: ReadFn, prompt: str) -> int:
-    return _prompt_until_valid(read, prompt, int, "whole number")
 
 
 def _confirm_trailer_profile(
@@ -371,6 +297,7 @@ def _confirm_trailer_profile(
 def _collect_axle_count(
     read: ReadFn,
     axle_count_source_factory: Callable[[str, str], FieldSource],
+    emit: Callable[[str], None] = print,
 ) -> int:
     """Looks up Axle Count from trailer make/model via
     `axle_count_source_factory` (default: `WebAxleCountFieldSource`), with
@@ -385,12 +312,12 @@ def _collect_axle_count(
     try:
         proposed = axle_count_source.propose("axle_count")
     except FieldSourceUnavailableError:
-        print(
+        emit(
             "Couldn't reach the axle-count lookup service - enter axle count manually."
         )
         return _read_int(read, "Axle count: ")
     if proposed is None:
-        print("Could not find axle count for this make/model - enter it manually.")
+        emit("Could not find axle count for this make/model - enter it manually.")
         return _read_int(read, "Axle count: ")
     return int(proposed)
 
@@ -415,6 +342,7 @@ def collect_trailer_profile_from_photo(
     axle_count_source_factory: Callable[[str, str], FieldSource] = (
         WebAxleCountFieldSource
     ),
+    emit: Callable[[str], None] = print,
 ) -> TrailerProfile | None:
     """Proposes GVWR/GAWR/UVW from a photo via `field_source`, and Axle
     Count via a make/model lookup (`axle_count_source_factory`) - Axle Count
@@ -425,34 +353,28 @@ def collect_trailer_profile_from_photo(
     `_confirm_trailer_profile` gate manual entry uses.
     """
     try:
-        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ")
+        gvwr = _resolve_required_field(read, field_source, "gvwr", "GVWR (lbs): ", emit)
         gawr = _resolve_required_field(
-            read, field_source, "gawr", "GAWR, each axle (lbs): "
+            read, field_source, "gawr", "GAWR, each axle (lbs): ", emit
         )
         uvw = _resolve_optional_field(
             read,
             field_source,
             "uvw",
             "UVW (lbs, optional - press Enter to skip): ",
+            emit,
         )
     except FieldSourceUnavailableError:
         # The service itself is unreachable, not just this one field - no
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
-        print("Couldn't reach the extraction service - enter all values manually.")
+        emit("Couldn't reach the extraction service - enter all values manually.")
         gvwr = _read_float(read, "GVWR (lbs): ")
         gawr = _read_float(read, "GAWR, each axle (lbs): ")
         uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
-    axle_count = _collect_axle_count(read, axle_count_source_factory)
+    axle_count = _collect_axle_count(read, axle_count_source_factory, emit)
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw, nickname)
-
-
-def _read_int_with_default(read: ReadFn, prompt: str, current: int) -> int:
-    def parse(raw: str) -> int:
-        return current if not raw.strip() else int(raw)
-
-    return _prompt_until_valid(read, prompt, parse, "whole number")
 
 
 def collect_trailer_profile_edit(
@@ -504,151 +426,17 @@ def collect_trailer_profile_edit(
     )
 
 
-def run_truck_add(
-    store: TruckStore,
+def select_profile[T](
     read: ReadFn,
-    photo_path: Path | None = None,
-    field_source_factory: Callable[
-        [Path], FieldSource
-    ] = ClaudeVisionTruckTagFieldSource,
-) -> None:
-    if photo_path is not None:
-        profile = collect_truck_profile_from_photo(
-            read, field_source_factory(photo_path)
-        )
-    else:
-        profile = collect_truck_profile(read)
-    if profile is None:
-        print("Discarded - Truck Profile not saved.")
-        return
-    store.save(profile)
-    print("Truck Profile saved.")
-
-
-def run_truck_edit(store: TruckStore, read: ReadFn) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Truck Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Truck")
-    current = _select_profile(
-        read, profiles, "Enter the ID of the Truck Profile to edit: "
-    )
-    updated = collect_truck_profile_edit(read, current)
-    if updated is None:
-        print("Discarded - Truck Profile not updated.")
-        return
-    store.update(updated)
-    print("Truck Profile updated.")
-
-
-def run_truck_delete(store: TruckStore, read: ReadFn) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Truck Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Truck")
-    selected = _select_profile(
-        read, profiles, "Enter the ID of the Truck Profile to delete: "
-    )
-    selected_nickname = _display_nickname(selected.nickname, "Truck", selected.id)
-    confirmation = read(
-        f"Delete Truck Profile [{selected.id}] {selected_nickname} — "
-        f"{selected}? [y/N]: "
-    )
-    if confirmation.strip().lower() != "y":
-        print("Cancelled - Truck Profile not deleted.")
-        return
-    assert selected.id is not None
-    store.delete(selected.id)
-    print("Truck Profile deleted.")
-
-
-def run_trailer_add(
-    store: TrailerStore,
-    read: ReadFn,
-    photo_path: Path | None = None,
-    field_source_factory: Callable[
-        [Path], FieldSource
-    ] = ClaudeVisionTrailerTagFieldSource,
-    axle_count_source_factory: Callable[
-        [str, str], FieldSource
-    ] = WebAxleCountFieldSource,
-) -> None:
-    if photo_path is not None:
-        profile = collect_trailer_profile_from_photo(
-            read, field_source_factory(photo_path), axle_count_source_factory
-        )
-    else:
-        profile = collect_trailer_profile(read, axle_count_source_factory)
-    if profile is None:
-        print("Discarded - Trailer Profile not saved.")
-        return
-    store.save(profile)
-    print("Trailer Profile saved.")
-
-
-def run_trailer_edit(store: TrailerStore, read: ReadFn) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Trailer Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Trailer")
-    current = _select_profile(
-        read, profiles, "Enter the ID of the Trailer Profile to edit: "
-    )
-    updated = collect_trailer_profile_edit(read, current)
-    if updated is None:
-        print("Discarded - Trailer Profile not updated.")
-        return
-    store.update(updated)
-    print("Trailer Profile updated.")
-
-
-def run_trailer_delete(store: TrailerStore, read: ReadFn) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Trailer Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Trailer")
-    selected = _select_profile(
-        read, profiles, "Enter the ID of the Trailer Profile to delete: "
-    )
-    selected_nickname = _display_nickname(selected.nickname, "Trailer", selected.id)
-    confirmation = read(
-        f"Delete Trailer Profile [{selected.id}] {selected_nickname} — "
-        f"{selected}? [y/N]: "
-    )
-    if confirmation.strip().lower() != "y":
-        print("Cancelled - Trailer Profile not deleted.")
-        return
-    assert selected.id is not None
-    store.delete(selected.id)
-    print("Trailer Profile deleted.")
-
-
-def run_trailer_list(store: TrailerStore) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Trailer Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Trailer")
-
-
-def run_truck_list(store: TruckStore) -> None:
-    profiles = store.list()
-    if not profiles:
-        print("No Truck Profiles saved yet.")
-        return
-    _list_with_ids(profiles, "Truck")
-
-
-def select_profile[T](read: ReadFn, profiles: Sequence[T], label: str) -> T:
+    profiles: Sequence[T],
+    label: str,
+    emit: Callable[[str], None] = print,
+) -> T:
     """Print a numbered list of `profiles` and prompt until the user picks a
     valid one. Assumes `profiles` is non-empty - callers should check first
     so they can print a more specific "none saved yet" message."""
     for index, profile in enumerate(profiles, start=1):
-        print(f"{index}. {profile}")
+        emit(f"{index}. {profile}")
 
     def parse(raw: str) -> T:
         selection = int(raw)
@@ -709,7 +497,9 @@ def collect_solo_ticket(read: ReadFn) -> SoloTicket | None:
 
 
 def collect_combined_ticket_from_photo(
-    read: ReadFn, field_source: TextFieldSource
+    read: ReadFn,
+    field_source: TextFieldSource,
+    emit: Callable[[str], None] = print,
 ) -> CombinedTicket | None:
     """Proposes Steer/Drive/Trailer Axle/Gross Weight, timestamp, and
     Reweigh Reference from a CAT Scale ticket photo via `field_source`.
@@ -724,22 +514,23 @@ def collect_combined_ticket_from_photo(
     `collect_combined_ticket` uses before anything is saved."""
     try:
         steer = _resolve_required_field(
-            read, field_source, "steer", "Steer Axle weight (lbs): "
+            read, field_source, "steer", "Steer Axle weight (lbs): ", emit
         )
         drive = _resolve_required_field(
-            read, field_source, "drive", "Drive Axle weight (lbs): "
+            read, field_source, "drive", "Drive Axle weight (lbs): ", emit
         )
         trailer_axle = _resolve_required_field(
-            read, field_source, "trailer_axle", "Trailer Axle weight (lbs): "
+            read, field_source, "trailer_axle", "Trailer Axle weight (lbs): ", emit
         )
         gross = _resolve_required_field(
-            read, field_source, "gross", "Gross Weight (lbs): "
+            read, field_source, "gross", "Gross Weight (lbs): ", emit
         )
         timestamp = _resolve_optional_text_field(
             read,
             field_source,
             "timestamp",
             "Ticket date/time, if any (optional, press Enter to skip): ",
+            emit,
         )
         reweigh_reference = _resolve_optional_text_field(
             read,
@@ -747,12 +538,13 @@ def collect_combined_ticket_from_photo(
             "reweigh_reference",
             "Reweigh reference printed on the ticket, if any (optional, "
             "press Enter to skip): ",
+            emit,
         )
     except FieldSourceUnavailableError:
         # The service itself is unreachable, not just this one field - no
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
-        print("Couldn't reach the extraction service - enter all values manually.")
+        emit("Couldn't reach the extraction service - enter all values manually.")
         steer = _read_float(read, "Steer Axle weight (lbs): ")
         drive = _read_float(read, "Drive Axle weight (lbs): ")
         trailer_axle = _read_float(read, "Trailer Axle weight (lbs): ")
@@ -785,7 +577,9 @@ def collect_combined_ticket_from_photo(
 
 
 def collect_solo_ticket_from_photo(
-    read: ReadFn, field_source: TextFieldSource
+    read: ReadFn,
+    field_source: TextFieldSource,
+    emit: Callable[[str], None] = print,
 ) -> SoloTicket | None:
     """Proposes Steer/Drive Axle/Gross Weight, timestamp, and Reweigh
     Reference from a CAT Scale ticket photo via `field_source` - mirrors
@@ -799,19 +593,20 @@ def collect_solo_ticket_from_photo(
     even if one came back."""
     try:
         steer = _resolve_required_field(
-            read, field_source, "steer", "Steer Axle weight (lbs): "
+            read, field_source, "steer", "Steer Axle weight (lbs): ", emit
         )
         drive = _resolve_required_field(
-            read, field_source, "drive", "Drive Axle weight (lbs): "
+            read, field_source, "drive", "Drive Axle weight (lbs): ", emit
         )
         gross = _resolve_required_field(
-            read, field_source, "gross", "Gross Weight (lbs): "
+            read, field_source, "gross", "Gross Weight (lbs): ", emit
         )
         timestamp = _resolve_optional_text_field(
             read,
             field_source,
             "timestamp",
             "Ticket date/time, if any (optional, press Enter to skip): ",
+            emit,
         )
         reweigh_reference = _resolve_optional_text_field(
             read,
@@ -819,9 +614,10 @@ def collect_solo_ticket_from_photo(
             "reweigh_reference",
             "Reweigh reference printed on the ticket, if any (optional, "
             "press Enter to skip): ",
+            emit,
         )
     except FieldSourceUnavailableError:
-        print("Couldn't reach the extraction service - enter all values manually.")
+        emit("Couldn't reach the extraction service - enter all values manually.")
         steer = _read_float(read, "Steer Axle weight (lbs): ")
         drive = _read_float(read, "Drive Axle weight (lbs): ")
         gross = _read_float(read, "Gross Weight (lbs): ")
@@ -869,15 +665,12 @@ def _ask_ticket_entry_mode(read: ReadFn, ticket_label: str) -> TicketEntryMode:
     return "photo" if response == "p" else "manual"
 
 
-def _read_photo_path(read: ReadFn, prompt: str) -> Path:
-    return Path(read(prompt))
-
-
 def collect_combined_ticket_interactive(
     read: ReadFn,
     field_source_factory: Callable[
         [Path], TextFieldSource
     ] = ClaudeVisionScaleTicketFieldSource,
+    emit: Callable[[str], None] = print,
 ) -> CombinedTicket | None:
     """Offers a photo path alongside manual entry for the Combined Ticket,
     per issue #10's acceptance criteria - see `_ask_ticket_entry_mode` for
@@ -886,7 +679,9 @@ def collect_combined_ticket_interactive(
     if mode == "manual":
         return collect_combined_ticket(read)
     photo_path = _read_photo_path(read, "Path to the Combined Ticket photo: ")
-    return collect_combined_ticket_from_photo(read, field_source_factory(photo_path))
+    return collect_combined_ticket_from_photo(
+        read, field_source_factory(photo_path), emit
+    )
 
 
 def collect_solo_ticket_interactive(
@@ -894,6 +689,7 @@ def collect_solo_ticket_interactive(
     field_source_factory: Callable[
         [Path], TextFieldSource
     ] = ClaudeVisionScaleTicketFieldSource,
+    emit: Callable[[str], None] = print,
 ) -> SoloTicket | None:
     """Offers a photo path alongside manual entry for a freshly-weighed Solo
     Ticket - mirrors `collect_combined_ticket_interactive`. Not used for the
@@ -903,11 +699,14 @@ def collect_solo_ticket_interactive(
     if mode == "manual":
         return collect_solo_ticket(read)
     photo_path = _read_photo_path(read, "Path to the Solo Ticket photo: ")
-    return collect_solo_ticket_from_photo(read, field_source_factory(photo_path))
+    return collect_solo_ticket_from_photo(read, field_source_factory(photo_path), emit)
 
 
 def determine_solo_link(
-    read: ReadFn, combined: CombinedTicket, solo: SoloTicket
+    read: ReadFn,
+    combined: CombinedTicket,
+    solo: SoloTicket,
+    emit: Callable[[str], None] = print,
 ) -> bool:
     """Decide whether a Solo Ticket belongs to the same Weigh Event as the
     Combined Ticket (see CONTEXT.md: Reweigh Reference).
@@ -917,7 +716,7 @@ def determine_solo_link(
     original ticket. Otherwise this falls back to asking the user to
     manually confirm the link, per the acceptance criteria in issue #9."""
     if reweigh_references_match(combined, solo):
-        print(
+        emit(
             f"Reweigh reference '{combined.reweigh_reference}' matches on both "
             "tickets - linked automatically."
         )
@@ -929,16 +728,6 @@ def determine_solo_link(
         "confirm the Solo Ticket belongs to the same Weigh Event as the "
         "Combined Ticket? [y/N]: ",
     )
-
-
-def run_weigh_event_history(weigh_event_store: WeighEventStore) -> None:
-    """List past Weigh Events, in chronological order, showing the
-    Truck+Trailer pairing used and each check's pass/fail result."""
-    records = weigh_event_store.list()
-    if not records:
-        print("No Weigh Events recorded yet.")
-        return
-    print(format_weigh_event_history(records))
 
 
 SoloTicketChoice = Literal["weigh_now", "reuse", "skip"]
@@ -977,7 +766,9 @@ def _ask_solo_ticket_choice(read: ReadFn, *, reuse_available: bool) -> SoloTicke
 
 
 def _collect_reused_solo_ticket(
-    read: ReadFn, past_record: WeighEventRecord
+    read: ReadFn,
+    past_record: WeighEventRecord,
+    emit: Callable[[str], None] = print,
 ) -> tuple[SoloTicket, str, bool]:
     """Reuse a past Weigh Event's linked Solo Ticket for this Truck Profile
     (see CONTEXT.md: Reused Solo Weight). Shows the past Gross Weight and
@@ -999,7 +790,7 @@ def _collect_reused_solo_ticket(
     and `TrailerGvwrOverloadResult.is_unverified`)."""
     past_solo = past_record.solo_ticket
     assert past_solo is not None
-    print(
+    emit(
         f"Last known Solo weight for this Truck Profile: {past_solo.gross} lbs, "
         f"recorded {past_record.timestamp}."
     )
@@ -1025,6 +816,7 @@ def _collect_linked_solo_ticket(
     field_source_factory: Callable[
         [Path], TextFieldSource
     ] = ClaudeVisionScaleTicketFieldSource,
+    emit: Callable[[str], None] = print,
 ) -> tuple[
     CombinedTicket, SoloTicket | None, TimeGapWarningResult | None, str | None, bool
 ]:
@@ -1053,7 +845,7 @@ def _collect_linked_solo_ticket(
     if choice == "reuse":
         assert last_solo_record is not None
         solo, reused_from_timestamp, solo_is_unverified = _collect_reused_solo_ticket(
-            read, last_solo_record
+            read, last_solo_record, emit
         )
         return ticket, solo, None, reused_from_timestamp, solo_is_unverified
 
@@ -1072,13 +864,13 @@ def _collect_linked_solo_ticket(
     )
     ticket = replace(ticket, reweigh_reference=combined_ref)
 
-    fresh_solo = collect_solo_ticket_interactive(read, field_source_factory)
+    fresh_solo = collect_solo_ticket_interactive(read, field_source_factory, emit)
     if fresh_solo is None:
-        print("Discarded - Solo Ticket not recorded.")
+        emit("Discarded - Solo Ticket not recorded.")
         return ticket, None, None, None, False
 
-    if not determine_solo_link(read, ticket, fresh_solo):
-        print(
+    if not determine_solo_link(read, ticket, fresh_solo, emit):
+        emit(
             "Solo Ticket not linked - discarding it. Derived Trailer Weight "
             "and Trailer GVWR Overload will not be evaluated for this Weigh "
             "Event."
@@ -1091,201 +883,3 @@ def _collect_linked_solo_ticket(
         "(0 if the same time): ",
     )
     return ticket, fresh_solo, check_time_gap(gap_hours), None, False
-
-
-def run_weigh_event(
-    truck_store: TruckStore,
-    trailer_store: TrailerStore,
-    weigh_event_store: WeighEventStore,
-    read: ReadFn,
-    now: Callable[[], str] = iso_now,
-    field_source_factory: Callable[
-        [Path], TextFieldSource
-    ] = ClaudeVisionScaleTicketFieldSource,
-) -> None:
-    """Pick a saved Truck Profile + Trailer Profile pairing, collect a
-    Combined Ticket (by photo or manual entry - see
-    `collect_combined_ticket_interactive`), report Axle Overload + Hitched
-    GVWR Overload + GCWR Overload (reported as "not evaluated" when the
-    Truck Profile has no GCWR on file), and persist the completed Weigh
-    Event to History."""
-    trucks = truck_store.list()
-    if not trucks:
-        print("No Truck Profiles saved yet. Add one with 'truck add' first.")
-        return
-
-    trailers = trailer_store.list()
-    if not trailers:
-        print("No Trailer Profiles saved yet. Add one with 'trailer add' first.")
-        return
-
-    print("Saved Truck Profiles:")
-    truck = select_profile(read, trucks, "Truck Profile")
-
-    print("Saved Trailer Profiles:")
-    trailer = select_profile(read, trailers, "Trailer Profile")
-
-    assert truck.id is not None
-    assert trailer.id is not None
-
-    ticket = collect_combined_ticket_interactive(read, field_source_factory)
-    if ticket is None:
-        print("Discarded - Combined Ticket not recorded.")
-        return
-
-    past_records = weigh_event_store.list()
-    (
-        ticket,
-        solo_ticket,
-        time_gap_result,
-        reused_solo_from_timestamp,
-        reused_solo_is_unverified,
-    ) = _collect_linked_solo_ticket(
-        read, ticket, past_records, truck.id, field_source_factory
-    )
-
-    axle_result = check_axle_overload(truck, trailer, ticket)
-    gvwr_result = check_hitched_gvwr_overload(truck, ticket)
-    gcwr_result = check_gcwr_overload(truck, ticket)
-    trailer_gvwr_result = check_trailer_gvwr_overload(
-        trailer, ticket, solo_ticket, solo_is_unverified=reused_solo_is_unverified
-    )
-
-    print(
-        format_weigh_event_results(
-            axle_result,
-            gvwr_result,
-            gcwr_result,
-            trailer_gvwr_result,
-            time_gap_result,
-        )
-    )
-
-    # Snapshot the Nickname (or its computed default) each Profile had right
-    # now, at save time - not a live reference - so a later rename or
-    # deletion never changes how this entry renders in history (see
-    # CONTEXT.md: Nickname, ADR 0004).
-    truck_nickname = _display_nickname(truck.nickname, "Truck", truck.id)
-    trailer_nickname = _display_nickname(trailer.nickname, "Trailer", trailer.id)
-
-    weigh_event_store.save(
-        WeighEventRecord(
-            truck_id=truck.id,
-            trailer_id=trailer.id,
-            ticket=ticket,
-            axle_result=axle_result,
-            gvwr_result=gvwr_result,
-            gcwr_result=gcwr_result,
-            solo_ticket=solo_ticket,
-            trailer_gvwr_result=trailer_gvwr_result,
-            truck_nickname=truck_nickname,
-            trailer_nickname=trailer_nickname,
-            time_gap_hours=(
-                time_gap_result.gap_hours if time_gap_result is not None else None
-            ),
-            reused_solo_from_timestamp=reused_solo_from_timestamp,
-            reused_solo_is_unverified=reused_solo_is_unverified,
-            timestamp=now(),
-        )
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="towing-app", description="Towing Limit Checker"
-    )
-    subparsers = parser.add_subparsers(dest="entity", required=True)
-
-    truck_parser = subparsers.add_parser("truck", help="Manage Truck Profiles")
-    truck_subparsers = truck_parser.add_subparsers(dest="action", required=True)
-    truck_add_parser = truck_subparsers.add_parser("add", help="Create a Truck Profile")
-    truck_add_parser.add_argument(
-        "--photo",
-        type=Path,
-        default=None,
-        help=(
-            "Path to a photo of the truck's federal certification label. "
-            "When given, GVWR/Front GAWR/Rear GAWR are proposed from the "
-            "photo instead of typed manually; GCWR is still entered "
-            "manually either way. Every proposed value still requires "
-            "confirmation before saving."
-        ),
-    )
-    truck_subparsers.add_parser("list", help="List saved Truck Profiles")
-    truck_subparsers.add_parser("edit", help="Edit an existing Truck Profile")
-    truck_subparsers.add_parser("delete", help="Delete a Truck Profile")
-
-    trailer_parser = subparsers.add_parser("trailer", help="Manage Trailer Profiles")
-    trailer_subparsers = trailer_parser.add_subparsers(dest="action", required=True)
-    trailer_add_parser = trailer_subparsers.add_parser(
-        "add", help="Create a Trailer Profile"
-    )
-    trailer_add_parser.add_argument(
-        "--photo",
-        type=Path,
-        default=None,
-        help=(
-            "Path to a photo of the trailer's federal certification label. "
-            "When given, GVWR/GAWR/UVW are proposed from the photo instead "
-            "of typed manually; Axle Count is always looked up by "
-            "make/model either way, with manual entry as the fallback when "
-            "the lookup can't find a match. Every proposed value still "
-            "requires confirmation before saving."
-        ),
-    )
-    trailer_subparsers.add_parser("list", help="List saved Trailer Profiles")
-    trailer_subparsers.add_parser("edit", help="Edit an existing Trailer Profile")
-    trailer_subparsers.add_parser("delete", help="Delete a Trailer Profile")
-
-    weigh_event_parser = subparsers.add_parser(
-        "weigh-event", help="Record and check a Weigh Event"
-    )
-    weigh_event_subparsers = weigh_event_parser.add_subparsers(
-        dest="action", required=True
-    )
-    weigh_event_subparsers.add_parser(
-        "run",
-        help=(
-            "Pick a Truck Profile + Trailer Profile, enter a Combined "
-            "Ticket, and check for Axle Overload / Hitched GVWR Overload / "
-            "GCWR Overload"
-        ),
-    )
-    weigh_event_subparsers.add_parser(
-        "history",
-        help="List past Weigh Events in chronological order",
-    )
-
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    db_path = resolve_db_path()
-
-    if args.entity == "truck" and args.action == "add":
-        run_truck_add(SqliteTruckStore(db_path), input, photo_path=args.photo)
-    elif args.entity == "truck" and args.action == "list":
-        run_truck_list(SqliteTruckStore(db_path))
-    elif args.entity == "truck" and args.action == "edit":
-        run_truck_edit(SqliteTruckStore(db_path), input)
-    elif args.entity == "truck" and args.action == "delete":
-        run_truck_delete(SqliteTruckStore(db_path), input)
-    elif args.entity == "trailer" and args.action == "add":
-        run_trailer_add(SqliteTrailerStore(db_path), input, photo_path=args.photo)
-    elif args.entity == "trailer" and args.action == "list":
-        run_trailer_list(SqliteTrailerStore(db_path))
-    elif args.entity == "trailer" and args.action == "edit":
-        run_trailer_edit(SqliteTrailerStore(db_path), input)
-    elif args.entity == "trailer" and args.action == "delete":
-        run_trailer_delete(SqliteTrailerStore(db_path), input)
-    elif args.entity == "weigh-event" and args.action == "run":
-        run_weigh_event(
-            SqliteTruckStore(db_path),
-            SqliteTrailerStore(db_path),
-            SqliteWeighEventStore(db_path),
-            input,
-        )
-    elif args.entity == "weigh-event" and args.action == "history":
-        run_weigh_event_history(SqliteWeighEventStore(db_path))
