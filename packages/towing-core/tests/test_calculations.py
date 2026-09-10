@@ -1,4 +1,4 @@
-from towing_app.calculations import (
+from towing_core.calculations import (
     TrailerGvwrOverloadResult,
     check_axle_overload,
     check_gcwr_overload,
@@ -7,7 +7,7 @@ from towing_app.calculations import (
     check_trailer_gvwr_overload,
     compute_derived_trailer_weight,
 )
-from towing_app.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
+from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 
 TRUCK = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
 TRAILER = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3, uvw=20554)

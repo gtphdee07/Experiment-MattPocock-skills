@@ -21,7 +21,7 @@ members = ["packages/*", "apps/*"]
 towing-core = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages/towing-core/tests"]
 
 [tool.mypy]
 python_version = "3.12"

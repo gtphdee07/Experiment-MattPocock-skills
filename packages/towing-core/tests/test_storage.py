@@ -1,7 +1,7 @@
 from dataclasses import replace
 
-from towing_app.models import TruckProfile
-from towing_app.storage import InMemoryTruckStore
+from towing_core.models import TruckProfile
+from towing_core.storage import InMemoryTruckStore
 
 
 def test_save_and_list_returns_saved_truck_profile() -> None:

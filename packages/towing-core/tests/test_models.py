@@ -1,4 +1,4 @@
-from towing_app.models import CombinedTicket, SoloTicket
+from towing_core.models import CombinedTicket, SoloTicket
 
 
 def test_combined_ticket_reweigh_reference_defaults_to_none() -> None:
