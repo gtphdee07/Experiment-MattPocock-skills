@@ -6,25 +6,56 @@ box markup can be unit-tested without a Streamlit runtime (see
 ``st.markdown(..., unsafe_allow_html=True)`` boxes - the background colour
 *is* the pass / near-limit / fail signal, which is why this is deliberately
 not ``st.metric``.
+
+Colours + icons per the WTWT theme deliverable (see ``streamlit-theme/``):
+hue alone never carries the status - each fill also gets a distinct border
+style (solid/dashed/dotted) and a small stroke icon, so the four statuses
+stay distinguishable for red-green colour blindness.
 """
 
 import html
 
 from towing_core.evaluation import EvaluatedCheck, OverloadStatus, RigEvaluation
 
-# Colours from the plan's Phase 1 spec (GitHub's status palette). Every box
-# uses white text on the solid fill: that stays legible on all four fills in
-# both the light and the dark Streamlit themes, so nothing here leans on the
-# theme's default text colour.
 STATUS_COLOR: dict[OverloadStatus, str] = {
-    OverloadStatus.PASS: "#1a7f37",
-    OverloadStatus.NEAR_LIMIT: "#9a6700",
-    OverloadStatus.FAIL: "#cf222e",
-    OverloadStatus.NOT_EVALUATED: "#6e7781",
+    OverloadStatus.PASS: "#335a2b",
+    OverloadStatus.NEAR_LIMIT: "#8a4d12",
+    OverloadStatus.FAIL: "#a8402f",
+    OverloadStatus.NOT_EVALUATED: "#4f4d48",
 }
 
-# Human form of each status name, for the box body ("Near Limit", not
-# "NEAR_LIMIT").
+STATUS_BORDER: dict[OverloadStatus, str] = {
+    OverloadStatus.PASS: "1px solid rgba(255,255,255,.28)",
+    OverloadStatus.NEAR_LIMIT: "2px dashed rgba(255,255,255,.6)",
+    OverloadStatus.FAIL: "2px solid rgba(255,255,255,.7)",
+    OverloadStatus.NOT_EVALUATED: "2px dotted rgba(255,255,255,.4)",
+}
+
+# 14px stroke icons, no icon font / external asset - inlined per the brief's
+# "no external assets" constraint.
+STATUS_ICON: dict[OverloadStatus, str] = {
+    OverloadStatus.PASS: (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" '
+        'stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M4 12l6 6L20 6"/></svg>'
+    ),
+    OverloadStatus.NEAR_LIMIT: (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" '
+        'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 3l10 18H2z"/><line x1="12" y1="10" x2="12" y2="14.5"/>'
+        '<circle cx="12" cy="17.3" r="0.9" fill="#fff" stroke="none"/></svg>'
+    ),
+    OverloadStatus.FAIL: (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" '
+        'stroke-width="3.5" stroke-linecap="round">'
+        '<path d="M5 5l14 14M19 5L5 19"/></svg>'
+    ),
+    OverloadStatus.NOT_EVALUATED: (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" '
+        'stroke-width="3.5" stroke-linecap="round"><path d="M5 12h14"/></svg>'
+    ),
+}
+
 STATUS_LABEL: dict[OverloadStatus, str] = {
     OverloadStatus.PASS: "Pass",
     OverloadStatus.NEAR_LIMIT: "Near Limit",
@@ -52,18 +83,17 @@ def grid_checks(evaluation: RigEvaluation) -> list[EvaluatedCheck]:
 
 
 def check_box_html(check: EvaluatedCheck) -> str:
-    """One coloured results box as a self-contained HTML string.
-
-    Shows the check label, its status name, the ``actual vs rating`` figures
-    when both are known, and - for a ``NOT_EVALUATED`` check - the reason
-    note carried on the ``EvaluatedCheck``.
-    """
+    """One coloured results box as a self-contained HTML string."""
     color = STATUS_COLOR[check.status]
+    border = STATUS_BORDER[check.status]
+    icon = STATUS_ICON[check.status]
+    label = html.escape(check.label)
+    status_word = html.escape(status_label(check.status))
     rows = [
-        f'<div style="font-weight:700;font-size:0.95rem">'
-        f"{html.escape(check.label)}</div>",
-        f'<div style="font-size:0.85rem;margin-top:0.15rem">'
-        f"{html.escape(status_label(check.status))}</div>",
+        f'<div style="display:flex;align-items:center;gap:6px">{icon}'
+        f'<span style="font-weight:700;font-size:0.95rem">{label}</span></div>',
+        f'<div style="font-size:0.85rem;font-weight:600;margin-top:0.3rem">'
+        f"{status_word}</div>",
     ]
     if check.actual is not None and check.rating is not None:
         rows.append(
@@ -76,7 +106,7 @@ def check_box_html(check: EvaluatedCheck) -> str:
             f"{html.escape(check.note)}</div>"
         )
     return (
-        f'<div style="background:{color};color:#ffffff;border-radius:8px;'
-        f"padding:0.7rem 0.85rem;margin-bottom:0.75rem;height:100%;"
+        f'<div style="background:{color};color:#ffffff;border-radius:1rem;'
+        f"border:{border};padding:0.7rem 0.85rem;margin-bottom:0.75rem;height:100%;"
         f'min-height:7rem">{"".join(rows)}</div>'
     )

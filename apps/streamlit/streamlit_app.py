@@ -14,6 +14,7 @@ makes the sibling ``towing_streamlit`` package importable below.
 """
 
 from collections.abc import Callable
+from pathlib import Path
 
 import streamlit as st
 
@@ -31,6 +32,13 @@ from towing_core.report import LEGAL_DISCLAIMER
 from towing_streamlit.results import check_box_html, grid_checks
 
 _TOTAL_STEPS = 5
+
+# WTWT brand marks (see docs/design/). Absolute paths off this file so they
+# resolve no matter the working directory `streamlit run` is invoked from -
+# `page_icon` / `st.logo` take a local path here, not a CWD-relative one.
+_ASSETS = Path(__file__).parent / "assets"
+_FAVICON = str(_ASSETS / "wtwt-favicon-mono.png")
+_LOGO = str(_ASSETS / "wtwt-logo.png")
 
 
 def _num(value: float | None) -> float:
@@ -341,7 +349,8 @@ _STEPS: list[Callable[[], None]] = [
 
 
 def main() -> None:
-    st.set_page_config(page_title="Towing Limit Checker", page_icon="⚖️")
+    st.set_page_config(page_title="Towing Limit Checker", page_icon=_FAVICON)
+    st.logo(_LOGO)
     st.title("Towing Limit Checker")
     st.caption(
         "Enter your rig's ratings and a CAT Scale weigh ticket to see whether the "
