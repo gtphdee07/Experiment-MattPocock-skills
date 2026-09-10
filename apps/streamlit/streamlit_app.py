@@ -6,9 +6,11 @@ imports only the compute tier (``towing_core``): no persistence, no accounts,
 no OCR, no ``anthropic`` (see ADR 0008 / ADR 0009 and the plan's Phase 1).
 The only reset is "Start over" - there is no saved history to reuse.
 
-Run with ``streamlit run apps/streamlit/towing_streamlit/streamlit_app.py``
-(the same path is the Streamlit Community Cloud main-file setting). Streamlit
-executes this module as ``__main__``.
+Run with ``streamlit run apps/streamlit/streamlit_app.py`` (the same path is
+the Streamlit Community Cloud main-file setting; ``apps/streamlit/`` also
+holds the ``requirements.txt`` Cloud installs from). Streamlit executes this
+module as ``__main__`` with ``apps/streamlit/`` on ``sys.path``, which is what
+makes the sibling ``towing_streamlit`` package importable below.
 """
 
 from collections.abc import Callable
@@ -19,11 +21,13 @@ from towing_core.evaluation import OverloadStatus, RigEvaluation, evaluate_weigh
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_core.report import LEGAL_DISCLAIMER
 
-# Absolute, not relative: `streamlit run` executes this file as a top-level
-# module (`__main__`) with no parent package, so `from .results import ...`
-# would fail. The `towing_streamlit` package is installed in the workspace
-# venv, so the absolute import resolves in every context (app run, AppTest,
-# plain import).
+# This entry point lives beside the ``towing_streamlit`` package, not inside
+# it: ``streamlit run`` executes it as top-level ``__main__`` (no parent
+# package, so ``from .results import ...`` cannot work), and Community Cloud
+# runs it the same way. With ``apps/streamlit/`` on ``sys.path`` -
+# ``streamlit run`` and the workspace-installed package both put it there -
+# the absolute import resolves without ``towing-streamlit`` needing to be a
+# pip dependency of the deploy.
 from towing_streamlit.results import check_box_html, grid_checks
 
 _TOTAL_STEPS = 5
