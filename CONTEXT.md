@@ -47,8 +47,12 @@ A field CAT Scale itself prints on a ticket, connecting a reweigh to the origina
 **Ticket Timestamp**:
 A CAT Scale Ticket's own printed date/time, captured as free-form text when a Combined or Solo Ticket is entered via photo (see ADR 0007) — `None` for manual entry, which has no source for it. Distinct from a Weigh Event's own timestamp (when the record was saved) and from the Time-Gap Warning's elapsed-hours entry, which it does not currently feed (see ADR 0005, ADR 0007).
 
+**Account**:
+A registered identity in the web app that logs in and owns exactly one Garage. Specific to the web app — the CLI and Streamlit calculator have no login and no Account concept; each just works against a single implicit Garage. Deliberately kept out of `towing-core`'s storage Protocols (see ADR 0010).
+_Avoid_: User (too generic — everything has a "user" in the informal sense; Account is the modeled, web-specific identity).
+
 **Garage**:
-The user's saved collection of Truck Profiles and Trailer Profiles, mixed and matched per Weigh Event.
+A saved collection of Truck Profiles and Trailer Profiles, mixed and matched per Weigh Event. In the web app, every Garage belongs to exactly one Account (1:1 — see ADR 0010); the CLI and Streamlit calculator each have just one, implicit Garage with no owner.
 
 **Truck Profile** / **Trailer Profile**:
 The saved specs for one Tow Vehicle or Trailer in the Garage: certification-label ratings, plus GCWR (Truck Profile, manual entry) or Axle Count (Trailer Profile, looked up and user-confirmed).
