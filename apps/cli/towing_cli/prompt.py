@@ -47,6 +47,35 @@ def _read_optional_float(read: ReadFn, prompt: str) -> float | None:
     return _prompt_until_valid(read, prompt, parse, "number")
 
 
+def _require_positive(value: float) -> float:
+    if value <= 0:
+        raise ValueError("must be greater than 0")
+    return value
+
+
+def _read_positive_float(read: ReadFn, prompt: str) -> float:
+    """Like `_read_float`, but re-prompts (via the same retry loop) on a
+    non-positive value too, not just an unparseable one - see issue #22:
+    a sign-typo'd negative weight must never silently reach domain-object
+    construction, where `__post_init__` would raise past this point with no
+    handler to catch it."""
+
+    def parse(raw: str) -> float:
+        return _require_positive(float(raw))
+
+    return _prompt_until_valid(read, prompt, parse, "number")
+
+
+def _read_optional_positive_float(read: ReadFn, prompt: str) -> float | None:
+    """Like `_read_optional_float`, but a provided (non-blank) value must
+    also be positive - see `_read_positive_float`."""
+
+    def parse(raw: str) -> float | None:
+        return None if not raw.strip() else _require_positive(float(raw))
+
+    return _prompt_until_valid(read, prompt, parse, "number")
+
+
 def _read_optional_str(read: ReadFn, prompt: str) -> str | None:
     stripped = read(prompt).strip()
     return stripped if stripped else None
@@ -66,6 +95,20 @@ def _read_float_with_default(read: ReadFn, prompt: str, current: float) -> float
     return _prompt_until_valid(read, prompt, parse, "number")
 
 
+def _read_positive_float_with_default(
+    read: ReadFn, prompt: str, current: float
+) -> float:
+    """Like `_read_float_with_default`, but a typed (non-blank) value must
+    also be positive - see `_read_positive_float`. `current` itself is
+    trusted (it came from an already-validated profile), so keeping it via
+    blank input never re-triggers the check."""
+
+    def parse(raw: str) -> float:
+        return current if not raw.strip() else _require_positive(float(raw))
+
+    return _prompt_until_valid(read, prompt, parse, "number")
+
+
 def _read_optional_float_with_default(
     read: ReadFn, prompt: str, current: float | None
 ) -> float | None:
@@ -80,6 +123,24 @@ def _read_optional_float_with_default(
     return _prompt_until_valid(read, prompt, parse, "number")
 
 
+def _read_optional_positive_float_with_default(
+    read: ReadFn, prompt: str, current: float | None
+) -> float | None:
+    """Like `_read_optional_float_with_default`, but a typed (non-blank,
+    non-'none') value must also be positive - see
+    `_read_positive_float_with_default`."""
+
+    def parse(raw: str) -> float | None:
+        stripped = raw.strip()
+        if not stripped:
+            return current
+        if stripped.lower() == "none":
+            return None
+        return _require_positive(float(stripped))
+
+    return _prompt_until_valid(read, prompt, parse, "number")
+
+
 def _read_int(read: ReadFn, prompt: str) -> int:
     return _prompt_until_valid(read, prompt, int, "whole number")
 
@@ -87,6 +148,30 @@ def _read_int(read: ReadFn, prompt: str) -> int:
 def _read_int_with_default(read: ReadFn, prompt: str, current: int) -> int:
     def parse(raw: str) -> int:
         return current if not raw.strip() else int(raw)
+
+    return _prompt_until_valid(read, prompt, parse, "whole number")
+
+
+def _require_at_least_one(value: int) -> int:
+    if value < 1:
+        raise ValueError("must be at least 1")
+    return value
+
+
+def _read_positive_int(read: ReadFn, prompt: str) -> int:
+    """Like `_read_int`, but re-prompts on a value below 1 too - see
+    `_read_positive_float` (used for `TrailerProfile.axle_count`, which
+    `__post_init__` requires to be at least 1)."""
+
+    def parse(raw: str) -> int:
+        return _require_at_least_one(int(raw))
+
+    return _prompt_until_valid(read, prompt, parse, "whole number")
+
+
+def _read_positive_int_with_default(read: ReadFn, prompt: str, current: int) -> int:
+    def parse(raw: str) -> int:
+        return current if not raw.strip() else _require_at_least_one(int(raw))
 
     return _prompt_until_valid(read, prompt, parse, "whole number")
 

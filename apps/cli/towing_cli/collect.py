@@ -25,14 +25,15 @@ from towing_cli.prompt import (
     _confirm,
     _prompt_until_valid,
     _read_float,
-    _read_float_with_default,
-    _read_int,
-    _read_int_with_default,
-    _read_optional_float,
-    _read_optional_float_with_default,
+    _read_optional_positive_float,
+    _read_optional_positive_float_with_default,
     _read_optional_str,
     _read_optional_str_with_default,
     _read_photo_path,
+    _read_positive_float,
+    _read_positive_float_with_default,
+    _read_positive_int,
+    _read_positive_int_with_default,
 )
 from towing_core.calculations import (
     TimeGapWarningResult,
@@ -128,21 +129,21 @@ def _confirm_truck_profile(
 def collect_truck_profile_edit(
     read: ReadFn, current: TruckProfile
 ) -> TruckProfile | None:
-    gvwr = _read_float_with_default(
+    gvwr = _read_positive_float_with_default(
         read, f"GVWR (lbs) [{current.gvwr}, Enter to keep]: ", current.gvwr
     )
-    front_gawr = _read_float_with_default(
+    front_gawr = _read_positive_float_with_default(
         read,
         f"Front GAWR (lbs) [{current.front_gawr}, Enter to keep]: ",
         current.front_gawr,
     )
-    rear_gawr = _read_float_with_default(
+    rear_gawr = _read_positive_float_with_default(
         read,
         f"Rear GAWR (lbs) [{current.rear_gawr}, Enter to keep]: ",
         current.rear_gawr,
     )
     gcwr_current = current.gcwr if current.gcwr is not None else "(not provided)"
-    gcwr = _read_optional_float_with_default(
+    gcwr = _read_optional_positive_float_with_default(
         read,
         f"GCWR (lbs) [{gcwr_current}, Enter to keep, 'none' to clear]: ",
         current.gcwr,
@@ -175,10 +176,12 @@ def collect_truck_profile_edit(
 
 
 def collect_truck_profile(read: ReadFn) -> TruckProfile | None:
-    gvwr = _read_float(read, "GVWR (lbs): ")
-    front_gawr = _read_float(read, "Front GAWR (lbs): ")
-    rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
-    gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
+    gvwr = _read_positive_float(read, "GVWR (lbs): ")
+    front_gawr = _read_positive_float(read, "Front GAWR (lbs): ")
+    rear_gawr = _read_positive_float(read, "Rear GAWR (lbs): ")
+    gcwr = _read_optional_positive_float(
+        read, "GCWR (lbs, optional - press Enter to skip): "
+    )
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr, nickname)
 
@@ -190,10 +193,14 @@ def _resolve_required_field(
     prompt: str,
     emit: Callable[[str], None] = print,
 ) -> float:
+    """A non-positive proposal is treated the same as no proposal at all -
+    it falls back to manual entry rather than reaching domain-object
+    construction, where `__post_init__` would reject it with no handler to
+    catch it (see issue #22)."""
     proposed = field_source.propose(field)
-    if proposed is None:
+    if proposed is None or proposed <= 0:
         emit(f"Could not read {field} from the photo - enter it manually.")
-        return _read_float(read, prompt)
+        return _read_positive_float(read, prompt)
     return proposed
 
 
@@ -204,13 +211,15 @@ def _resolve_optional_field(
     prompt: str,
     emit: Callable[[str], None] = print,
 ) -> float | None:
+    """Mirrors `_resolve_required_field`'s non-positive-proposal handling -
+    see that function's docstring."""
     proposed = field_source.propose(field)
-    if proposed is None:
+    if proposed is None or proposed <= 0:
         emit(
             f"Could not read {field} from the photo - enter it manually, "
             "or press Enter to skip."
         )
-        return _read_optional_float(read, prompt)
+        return _read_optional_positive_float(read, prompt)
     return proposed
 
 
@@ -257,10 +266,12 @@ def collect_truck_profile_from_photo(
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
         emit("Couldn't reach the extraction service - enter all values manually.")
-        gvwr = _read_float(read, "GVWR (lbs): ")
-        front_gawr = _read_float(read, "Front GAWR (lbs): ")
-        rear_gawr = _read_float(read, "Rear GAWR (lbs): ")
-    gcwr = _read_optional_float(read, "GCWR (lbs, optional - press Enter to skip): ")
+        gvwr = _read_positive_float(read, "GVWR (lbs): ")
+        front_gawr = _read_positive_float(read, "Front GAWR (lbs): ")
+        rear_gawr = _read_positive_float(read, "Rear GAWR (lbs): ")
+    gcwr = _read_optional_positive_float(
+        read, "GCWR (lbs, optional - press Enter to skip): "
+    )
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_truck_profile(read, gvwr, front_gawr, rear_gawr, gcwr, nickname)
 
@@ -314,10 +325,12 @@ def _collect_axle_count(
         emit(
             "Couldn't reach the axle-count lookup service - enter axle count manually."
         )
-        return _read_int(read, "Axle count: ")
-    if proposed is None:
+        return _read_positive_int(read, "Axle count: ")
+    # A non-positive lookup result is treated the same as no result at all -
+    # see `_resolve_required_field`'s docstring for why (issue #22).
+    if proposed is None or proposed < 1:
         emit("Could not find axle count for this make/model - enter it manually.")
-        return _read_int(read, "Axle count: ")
+        return _read_positive_int(read, "Axle count: ")
     return int(proposed)
 
 
@@ -327,10 +340,12 @@ def collect_trailer_profile(
         WebAxleCountFieldSource
     ),
 ) -> TrailerProfile | None:
-    gvwr = _read_float(read, "GVWR (lbs): ")
-    gawr = _read_float(read, "GAWR, each axle (lbs): ")
-    axle_count = _read_int(read, "Axle count: ")
-    uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
+    gvwr = _read_positive_float(read, "GVWR (lbs): ")
+    gawr = _read_positive_float(read, "GAWR, each axle (lbs): ")
+    axle_count = _read_positive_int(read, "Axle count: ")
+    uvw = _read_optional_positive_float(
+        read, "UVW (lbs, optional - press Enter to skip): "
+    )
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw, nickname)
 
@@ -368,9 +383,11 @@ def collect_trailer_profile_from_photo(
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
         emit("Couldn't reach the extraction service - enter all values manually.")
-        gvwr = _read_float(read, "GVWR (lbs): ")
-        gawr = _read_float(read, "GAWR, each axle (lbs): ")
-        uvw = _read_optional_float(read, "UVW (lbs, optional - press Enter to skip): ")
+        gvwr = _read_positive_float(read, "GVWR (lbs): ")
+        gawr = _read_positive_float(read, "GAWR, each axle (lbs): ")
+        uvw = _read_optional_positive_float(
+            read, "UVW (lbs, optional - press Enter to skip): "
+        )
     axle_count = _collect_axle_count(read, axle_count_source_factory, emit)
     nickname = _read_optional_str(read, NICKNAME_PROMPT)
     return _confirm_trailer_profile(read, gvwr, gawr, axle_count, uvw, nickname)
@@ -379,21 +396,21 @@ def collect_trailer_profile_from_photo(
 def collect_trailer_profile_edit(
     read: ReadFn, current: TrailerProfile
 ) -> TrailerProfile | None:
-    gvwr = _read_float_with_default(
+    gvwr = _read_positive_float_with_default(
         read, f"GVWR (lbs) [{current.gvwr}, Enter to keep]: ", current.gvwr
     )
-    gawr = _read_float_with_default(
+    gawr = _read_positive_float_with_default(
         read,
         f"GAWR, each axle (lbs) [{current.gawr}, Enter to keep]: ",
         current.gawr,
     )
-    axle_count = _read_int_with_default(
+    axle_count = _read_positive_int_with_default(
         read,
         f"Axle count [{current.axle_count}, Enter to keep]: ",
         current.axle_count,
     )
     uvw_current = current.uvw if current.uvw is not None else "(not provided)"
-    uvw = _read_optional_float_with_default(
+    uvw = _read_optional_positive_float_with_default(
         read,
         f"UVW (lbs) [{uvw_current}, Enter to keep, 'none' to clear]: ",
         current.uvw,
@@ -450,10 +467,10 @@ def select_profile[T](
 def collect_combined_ticket(read: ReadFn) -> CombinedTicket | None:
     """Manually enter a Combined Ticket: the CAT Scale reading for a Weigh
     Event where the Tow Vehicle and Trailer were weighed hitched together."""
-    steer = _read_float(read, "Steer Axle weight (lbs): ")
-    drive = _read_float(read, "Drive Axle weight (lbs): ")
-    trailer_axle = _read_float(read, "Trailer Axle weight (lbs): ")
-    gross = _read_float(read, "Gross Weight (lbs): ")
+    steer = _read_positive_float(read, "Steer Axle weight (lbs): ")
+    drive = _read_positive_float(read, "Drive Axle weight (lbs): ")
+    trailer_axle = _read_positive_float(read, "Trailer Axle weight (lbs): ")
+    gross = _read_positive_float(read, "Gross Weight (lbs): ")
 
     confirmed = _confirm(
         read,
@@ -473,9 +490,9 @@ def collect_solo_ticket(read: ReadFn) -> SoloTicket | None:
     Event where the Tow Vehicle was weighed alone (see CONTEXT.md: Solo
     Ticket). No Trailer Axle field - nothing is hitched behind the Tow
     Vehicle for a Solo Ticket."""
-    steer = _read_float(read, "Steer Axle weight (lbs): ")
-    drive = _read_float(read, "Drive Axle weight (lbs): ")
-    gross = _read_float(read, "Gross Weight (lbs): ")
+    steer = _read_positive_float(read, "Steer Axle weight (lbs): ")
+    drive = _read_positive_float(read, "Drive Axle weight (lbs): ")
+    gross = _read_positive_float(read, "Gross Weight (lbs): ")
     reweigh_reference = _read_optional_str(
         read,
         "Reweigh reference printed on the ticket, if any (optional, press "
@@ -544,10 +561,10 @@ def collect_combined_ticket_from_photo(
         # point trying the remaining fields against it, and the message
         # must not imply the photo was the problem (see ADR 0003).
         emit("Couldn't reach the extraction service - enter all values manually.")
-        steer = _read_float(read, "Steer Axle weight (lbs): ")
-        drive = _read_float(read, "Drive Axle weight (lbs): ")
-        trailer_axle = _read_float(read, "Trailer Axle weight (lbs): ")
-        gross = _read_float(read, "Gross Weight (lbs): ")
+        steer = _read_positive_float(read, "Steer Axle weight (lbs): ")
+        drive = _read_positive_float(read, "Drive Axle weight (lbs): ")
+        trailer_axle = _read_positive_float(read, "Trailer Axle weight (lbs): ")
+        gross = _read_positive_float(read, "Gross Weight (lbs): ")
         timestamp = _read_optional_str(
             read, "Ticket date/time, if any (optional, press Enter to skip): "
         )
@@ -617,9 +634,9 @@ def collect_solo_ticket_from_photo(
         )
     except FieldSourceUnavailableError:
         emit("Couldn't reach the extraction service - enter all values manually.")
-        steer = _read_float(read, "Steer Axle weight (lbs): ")
-        drive = _read_float(read, "Drive Axle weight (lbs): ")
-        gross = _read_float(read, "Gross Weight (lbs): ")
+        steer = _read_positive_float(read, "Steer Axle weight (lbs): ")
+        drive = _read_positive_float(read, "Drive Axle weight (lbs): ")
+        gross = _read_positive_float(read, "Gross Weight (lbs): ")
         timestamp = _read_optional_str(
             read, "Ticket date/time, if any (optional, press Enter to skip): "
         )
@@ -798,7 +815,7 @@ def _collect_reused_solo_ticket(
         "Has anything changed since then (cargo, fuel, passengers)? [y/N]: ",
     )
     if changed:
-        new_gross = _read_float(
+        new_gross = _read_positive_float(
             read,
             "New Gross Weight for the Tow Vehicle, lbs (Unverified Value - not "
             "backed by a photo or CAT Scale Ticket): ",
