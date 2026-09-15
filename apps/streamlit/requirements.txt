@@ -1,2 +1,2 @@
-streamlit>=1.40
+streamlit>=1.40,<1.64
 ./packages/towing-core

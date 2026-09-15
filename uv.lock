@@ -1458,7 +1458,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "streamlit", specifier = ">=1.40" },
+    { name = "streamlit", specifier = ">=1.40,<1.64" },
     { name = "towing-core", editable = "packages/towing-core" },
 ]
 
