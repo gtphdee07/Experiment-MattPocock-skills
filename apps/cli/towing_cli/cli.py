@@ -28,7 +28,6 @@ from towing_app.sqlite import (
     SqliteWeighEventStore,
 )
 from towing_cli.collect import (
-    _collect_linked_solo_ticket,
     _list_with_ids,
     _select_profile,
     collect_combined_ticket,
@@ -43,10 +42,10 @@ from towing_cli.collect import (
     collect_truck_profile,
     collect_truck_profile_edit,
     collect_truck_profile_from_photo,
-    determine_solo_link,
     select_profile,
 )
 from towing_cli.prompt import ReadFn
+from towing_cli.solo_ticket import decide_solo_ticket
 from towing_core.field_acquisition import FieldSource, TextFieldSource
 from towing_core.report import (
     LEGAL_DISCLAIMER,
@@ -71,7 +70,6 @@ __all__ = [
     "DB_PATH_ENV_VAR",
     "DEFAULT_DB_PATH",
     "LEGAL_DISCLAIMER",
-    "_collect_linked_solo_ticket",
     "_display_nickname",
     "_format_axle_check",
     "_format_weigh_event_record",
@@ -90,7 +88,6 @@ __all__ = [
     "collect_truck_profile",
     "collect_truck_profile_edit",
     "collect_truck_profile_from_photo",
-    "determine_solo_link",
     "format_weigh_event_history",
     "format_weigh_event_results",
     "main",
@@ -308,26 +305,24 @@ def run_weigh_event(
         return
 
     past_records = weigh_event_store.list()
-    (
-        ticket,
-        solo_ticket,
-        time_gap_result,
-        reused_solo_from_timestamp,
-        reused_solo_is_unverified,
-    ) = _collect_linked_solo_ticket(
+    decision = decide_solo_ticket(
         read, ticket, past_records, truck.id, field_source_factory
     )
 
-    time_gap_hours = time_gap_result.gap_hours if time_gap_result is not None else None
+    time_gap_hours = (
+        decision.time_gap_result.gap_hours
+        if decision.time_gap_result is not None
+        else None
+    )
 
     outcome = record_weigh_event(
         truck,
         trailer,
-        ticket,
-        solo_ticket,
-        solo_is_unverified=reused_solo_is_unverified,
+        decision.ticket,
+        decision.solo_ticket,
+        solo_is_unverified=decision.reused_solo_is_unverified,
         time_gap_hours=time_gap_hours,
-        reused_solo_from_timestamp=reused_solo_from_timestamp,
+        reused_solo_from_timestamp=decision.reused_solo_from_timestamp,
         weigh_event_store=weigh_event_store,
         now=now,
     )
