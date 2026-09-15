@@ -376,6 +376,22 @@ def test_trailer_gvwr_overload_trusted_not_flagged_near_limit_when_200_under() -
     assert result.is_near_limit is False
 
 
+def test_near_limit_margin_lbs_is_the_trusted_margin_when_not_unverified() -> None:
+    result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23400, gvwr_rating=23500, is_unverified=False
+    )
+
+    assert result.near_limit_margin_lbs == 100
+
+
+def test_near_limit_margin_lbs_is_the_wider_margin_when_unverified() -> None:
+    result = TrailerGvwrOverloadResult(
+        derived_trailer_weight=23300, gvwr_rating=23500, is_unverified=True
+    )
+
+    assert result.near_limit_margin_lbs == 300
+
+
 def test_trailer_gvwr_overload_unverified_never_flagged_near_limit_when_over() -> None:
     # Over the limit is still never flagged as close, even for an Unverified
     # Value and even though the overage is well within the widened margin

@@ -159,13 +159,26 @@ class TrailerGvwrOverloadResult:
         return self.derived_trailer_weight > self.gvwr_rating
 
     @property
+    def near_limit_margin_lbs(self) -> int:
+        """The near-limit margin that applies to this result - the wider
+        `TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS` for an Unverified
+        Value, otherwise the trusted `TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS`
+        (see ADR 0006; issue #17). The single source of truth for which
+        margin applies to a given result - `is_near_limit` below is defined
+        in terms of it, and callers that need to report the margin (rather
+        than just whether it was crossed) should read it here instead of
+        re-deriving it themselves."""
+        return (
+            TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS
+            if self.is_unverified
+            else TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
+        )
+
+    @property
     def is_near_limit(self) -> bool:
         """Close to the limit: Derived Trailer Weight is within
-        `TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS` lbs under the GVWR rating,
-        boundary inclusive (see CONTEXT.md: Trailer GVWR Overload; ADR 0006).
-        Widened to `TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS` lbs under
-        when this result is an Unverified Value - the extra uncertainty in a
-        user-estimated number warrants a wider margin (see ADR 0006).
+        `near_limit_margin_lbs` lbs under the GVWR rating, boundary inclusive
+        (see CONTEXT.md: Trailer GVWR Overload; ADR 0006).
 
         Never `True` when actually overloaded - being over is reported as
         overloaded, full stop, with no "close" qualifier layered on top,
@@ -173,11 +186,7 @@ class TrailerGvwrOverloadResult:
         over-the-limit side)."""
         if self.is_overloaded:
             return False
-        margin = (
-            TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS
-            if self.is_unverified
-            else TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
-        )
+        margin = self.near_limit_margin_lbs
         return (self.gvwr_rating - self.derived_trailer_weight) <= margin
 
 

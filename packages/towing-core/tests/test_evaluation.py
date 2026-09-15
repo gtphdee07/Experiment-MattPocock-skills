@@ -12,9 +12,11 @@ from towing_core.calculations import (
 from towing_core.evaluation import (
     OverloadStatus,
     evaluate_weigh_event,
+    rig_evaluation_from_record,
     status_for,
 )
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
+from towing_core.storage import WeighEventRecord
 
 TRUCK = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500)
 TRUCK_NO_GCWR = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=None)
@@ -230,3 +232,69 @@ def test_evaluate_carries_through_the_exact_check_results() -> None:
     assert rig.trailer_gvwr_result == check_trailer_gvwr_overload(
         TRAILER, combined, solo, solo_is_unverified=False
     )
+
+
+# --- rig_evaluation_from_record: the history-path equivalent -----------------
+
+
+def test_rig_evaluation_from_record_matches_evaluate_weigh_event() -> None:
+    # Drive axle 10000 > 9900 -> FAIL; GCWR 33000 > 32500 -> FAIL; Derived
+    # Trailer Weight 33000 - 9580 = 23420, 80 lb under the 23500 GVWR (within
+    # the trusted 100 lb margin) -> NEAR_LIMIT - the same worked example as
+    # `test_evaluate_weigh_event_folds_each_check`, so both paths can be
+    # compared directly against each other.
+    combined = CombinedTicket(steer=5000, drive=10000, trailer_axle=19000, gross=33000)
+    solo = SoloTicket(steer=5000, drive=4580, gross=9580)
+
+    from_truck_trailer = evaluate_weigh_event(
+        TRUCK, TRAILER, combined, solo, time_gap_hours=6.0
+    )
+
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=1,
+        ticket=combined,
+        axle_result=from_truck_trailer.axle_result,
+        gvwr_result=from_truck_trailer.hitched_gvwr_result,
+        timestamp="2026-09-15T12:00:00+00:00",
+        gcwr_result=from_truck_trailer.gcwr_result,
+        solo_ticket=solo,
+        trailer_gvwr_result=from_truck_trailer.trailer_gvwr_result,
+        time_gap_hours=6.0,
+    )
+
+    from_record = rig_evaluation_from_record(record)
+
+    assert from_record.overall_status == from_truck_trailer.overall_status
+    assert from_record.steer_axle.status == from_truck_trailer.steer_axle.status
+    assert from_record.drive_axle.status == from_truck_trailer.drive_axle.status
+    assert from_record.trailer_axle.status == from_truck_trailer.trailer_axle.status
+    assert from_record.hitched_gvwr.status == from_truck_trailer.hitched_gvwr.status
+    assert from_record.gcwr.status == from_truck_trailer.gcwr.status
+    assert from_record.trailer_gvwr.status == from_truck_trailer.trailer_gvwr.status
+    assert from_record.time_gap_result == from_truck_trailer.time_gap_result
+
+
+def test_rig_evaluation_from_record_no_time_gap_when_not_linked() -> None:
+    combined = CombinedTicket(steer=5000, drive=9000, trailer_axle=16000, gross=30000)
+    axle_result = check_axle_overload(TRUCK, TRAILER, combined)
+    hitched_gvwr_result = check_hitched_gvwr_overload(TRUCK, combined)
+    gcwr_result = check_gcwr_overload(TRUCK, combined)
+
+    record = WeighEventRecord(
+        truck_id=1,
+        trailer_id=1,
+        ticket=combined,
+        axle_result=axle_result,
+        gvwr_result=hitched_gvwr_result,
+        timestamp="2026-09-15T12:00:00+00:00",
+        gcwr_result=gcwr_result,
+        solo_ticket=None,
+        trailer_gvwr_result=None,
+        time_gap_hours=None,
+    )
+
+    rig = rig_evaluation_from_record(record)
+
+    assert rig.time_gap_result is None
+    assert rig.trailer_gvwr.status == OverloadStatus.NOT_EVALUATED
