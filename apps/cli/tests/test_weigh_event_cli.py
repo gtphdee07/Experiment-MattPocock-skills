@@ -11,12 +11,12 @@ from towing_cli.cli import (
     collect_solo_ticket,
     collect_solo_ticket_from_photo,
     collect_solo_ticket_interactive,
-    determine_solo_link,
     format_weigh_event_results,
     run_weigh_event,
     run_weigh_event_history,
     select_profile,
 )
+from towing_cli.solo_ticket import determine_solo_link
 from towing_core.calculations import (
     AxleCheckResult,
     AxleOverloadResult,
