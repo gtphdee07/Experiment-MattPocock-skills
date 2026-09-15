@@ -17,6 +17,13 @@ class TruckProfile:
     nickname: str | None = None
     id: int | None = field(default=None, compare=False)
 
+    def __post_init__(self) -> None:
+        for name in ("gvwr", "front_gawr", "rear_gawr"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.gcwr is not None and self.gcwr <= 0:
+            raise ValueError("gcwr must be greater than 0 when provided")
+
     def __str__(self) -> str:
         gcwr_display = self.gcwr if self.gcwr is not None else "(not on file)"
         return (
@@ -36,6 +43,15 @@ class TrailerProfile:
     uvw: float | None = None
     nickname: str | None = None
     id: int | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        for name in ("gvwr", "gawr"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.axle_count < 1:
+            raise ValueError("axle_count must be at least 1")
+        if self.uvw is not None and self.uvw <= 0:
+            raise ValueError("uvw must be greater than 0 when provided")
 
     def __str__(self) -> str:
         uvw_display = self.uvw if self.uvw is not None else "(not on file)"
@@ -72,6 +88,11 @@ class CombinedTicket:
     reweigh_reference: str | None = None
     timestamp: str | None = None
 
+    def __post_init__(self) -> None:
+        for name in ("steer", "drive", "trailer_axle", "gross"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+
     def __str__(self) -> str:
         base = (
             f"Steer: {self.steer} lb | Drive: {self.drive} lb | "
@@ -99,6 +120,11 @@ class SoloTicket:
     gross: float
     reweigh_reference: str | None = None
     timestamp: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("steer", "drive", "gross"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
 
     def __str__(self) -> str:
         base = (

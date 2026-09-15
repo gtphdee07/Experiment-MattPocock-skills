@@ -112,6 +112,39 @@ def test_collect_combined_ticket_reprompts_on_invalid_number() -> None:
     )
 
 
+def test_collect_combined_ticket_reprompts_on_non_positive_number() -> None:
+    """A sign-typo'd negative weight (issue #22) must re-prompt for that
+    field via the same retry loop `_prompt_until_valid` already uses for an
+    unparseable value - not go on to construct a `CombinedTicket` with a
+    negative Drive Axle reading, which would raise past this point with
+    nothing to catch it and crash the CLI instead of re-prompting."""
+    responses = iter(["5640", "-6500", "6500", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    result = collect_combined_ticket(read)
+
+    assert result == CombinedTicket(
+        steer=5640, drive=6500, trailer_axle=19680, gross=34400
+    )
+
+
+def test_collect_combined_ticket_reprompt_message_on_non_positive_number(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    responses = iter(["5640", "-6500", "6500", "19680", "34400", "y"])
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    collect_combined_ticket(read)
+
+    printed = capsys.readouterr().out
+    assert "-6500" in printed
+    assert "not a valid number" in printed
+
+
 def test_collect_combined_ticket_confirmation_prompt_echoes_entered_values() -> None:
     responses = iter(["5640", "9080", "19680", "34400", "y"])
     prompts: list[str] = []
