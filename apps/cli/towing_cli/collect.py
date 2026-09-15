@@ -24,7 +24,6 @@ from towing_cli.prompt import (
     ReadFn,
     _confirm,
     _prompt_until_valid,
-    _read_float,
     _read_optional_positive_float,
     _read_optional_positive_float_with_default,
     _read_optional_str,
