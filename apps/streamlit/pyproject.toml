@@ -3,7 +3,7 @@ name = "towing-streamlit"
 version = "0.1.0"
 description = "Towing Limit Checker: standalone offline Streamlit calculator (compute tier only)"
 requires-python = ">=3.12"
-dependencies = ["streamlit>=1.40", "towing-core"]
+dependencies = ["streamlit>=1.40,<1.64", "towing-core"]
 
 [build-system]
 requires = ["hatchling"]
