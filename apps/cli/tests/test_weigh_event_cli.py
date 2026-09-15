@@ -24,6 +24,7 @@ from towing_core.calculations import (
     HitchedGvwrOverloadResult,
     TrailerGvwrOverloadResult,
 )
+from towing_core.evaluation import _assemble_rig_evaluation
 from towing_core.field_acquisition import FieldSourceUnavailableError
 from towing_core.models import CombinedTicket, SoloTicket, TrailerProfile, TruckProfile
 from towing_core.storage import (
@@ -720,9 +721,10 @@ def test_format_weigh_event_results_flags_near_limit_trailer_gvwr() -> None:
         derived_trailer_weight=23400, gvwr_rating=23500
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     assert "no Trailer GVWR Overload detected" in output
     assert "near" in output.lower()
@@ -736,9 +738,10 @@ def test_format_weigh_event_results_does_not_flag_near_limit_when_comfortably_un
         derived_trailer_weight=19680, gvwr_rating=23500
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     assert "no Trailer GVWR Overload detected" in output
     assert "near" not in output.lower()
@@ -753,9 +756,10 @@ def test_format_weigh_event_results_never_flags_near_limit_when_actually_overloa
         derived_trailer_weight=23600, gvwr_rating=23500
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     assert "Trailer GVWR Overload detected" in output
     assert "near" not in output.lower()
@@ -770,9 +774,10 @@ def test_format_weigh_event_results_near_limit_message_says_100_lbs_when_trusted
         derived_trailer_weight=23400, gvwr_rating=23500, is_unverified=False
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     assert "within 100 lbs" in output
     assert "within 300 lbs" not in output
@@ -788,9 +793,10 @@ def test_format_weigh_event_results_near_limit_message_says_300_lbs_when_unverif
         derived_trailer_weight=23300, gvwr_rating=23500, is_unverified=True
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     assert "within 300 lbs" in output
     assert "within 100 lbs" not in output
@@ -804,9 +810,10 @@ def test_format_weigh_event_results_labels_unverified_trailer_gvwr() -> None:
         derived_trailer_weight=19680, gvwr_rating=23500, is_unverified=True
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     trailer_section = output.split("Trailer GVWR Overload")[1].split("\n\n")[0]
     assert "Unverified Value" in trailer_section
@@ -819,9 +826,10 @@ def test_format_weigh_event_results_does_not_label_trusted_trailer_gvwr_unverifi
         derived_trailer_weight=19680, gvwr_rating=23500, is_unverified=False
     )
 
-    output = format_weigh_event_results(
-        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result
+    evaluation = _assemble_rig_evaluation(
+        _AXLE_RESULT, _GVWR_RESULT, None, trailer_gvwr_result, None
     )
+    output = format_weigh_event_results(evaluation)
 
     trailer_section = output.split("Trailer GVWR Overload")[1].split("\n\n")[0]
     assert "Unverified Value" not in trailer_section

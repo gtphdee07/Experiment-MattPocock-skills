@@ -53,7 +53,6 @@ from towing_core.report import (
     _display_nickname,
     _format_axle_check,
     _format_weigh_event_record,
-    _trailer_gvwr_near_limit_margin_lbs,
     format_weigh_event_history,
     format_weigh_event_results,
 )
@@ -78,7 +77,6 @@ __all__ = [
     "_format_weigh_event_record",
     "_list_with_ids",
     "_select_profile",
-    "_trailer_gvwr_near_limit_margin_lbs",
     "build_parser",
     "collect_combined_ticket",
     "collect_combined_ticket_from_photo",
@@ -340,15 +338,7 @@ def run_weigh_event(
         return
 
     evaluation, _record = outcome
-    print(
-        format_weigh_event_results(
-            evaluation.axle_result,
-            evaluation.hitched_gvwr_result,
-            evaluation.gcwr_result,
-            evaluation.trailer_gvwr_result,
-            evaluation.time_gap_result,
-        )
-    )
+    print(format_weigh_event_results(evaluation))
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -8,14 +8,11 @@ the actual printing.
 
 from collections.abc import Sequence
 
-from towing_core.calculations import (
-    TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS,
-    TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS,
-    AxleOverloadResult,
-    GcwrOverloadResult,
-    HitchedGvwrOverloadResult,
-    TimeGapWarningResult,
-    TrailerGvwrOverloadResult,
+from towing_core.calculations import AxleOverloadResult
+from towing_core.evaluation import (
+    OverloadStatus,
+    RigEvaluation,
+    rig_evaluation_from_record,
 )
 from towing_core.storage import WeighEventRecord
 
@@ -55,46 +52,42 @@ def _format_axle_check(check: AxleOverloadResult) -> list[str]:
     return lines
 
 
-def _trailer_gvwr_near_limit_margin_lbs(result: TrailerGvwrOverloadResult) -> int:
-    """The near-limit margin that actually applies to `result` - the wider
-    `TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS` for an Unverified Value,
-    otherwise the trusted `TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS` (see ADR 0006;
-    issue #17)."""
-    return (
-        TRAILER_GVWR_NEAR_LIMIT_UNVERIFIED_MARGIN_LBS
-        if result.is_unverified
-        else TRAILER_GVWR_NEAR_LIMIT_MARGIN_LBS
-    )
-
-
-def format_weigh_event_results(
-    axle_result: AxleOverloadResult,
-    gvwr_result: HitchedGvwrOverloadResult,
-    gcwr_result: GcwrOverloadResult | None,
-    trailer_gvwr_result: TrailerGvwrOverloadResult | None = None,
-    time_gap_result: TimeGapWarningResult | None = None,
-) -> str:
+def format_weigh_event_results(evaluation: RigEvaluation) -> str:
     """Render all checks as plain-language results, always followed by the
     legal disclaimer.
 
-    `gcwr_result` is `None` when the Truck Profile has no GCWR on file - a
-    distinct "not evaluated" state (see ADR 0002), reported without blocking
-    or hiding the other two checks. When it is present, GCWR Overload
-    depends on a manually-typed value with no photo/CAT Scale Ticket backing
-    it, so its result is labeled an Unverified Value (see CONTEXT.md:
-    Unverified Value).
+    Takes the already-folded `RigEvaluation` (see `towing_core.evaluation`)
+    rather than raw `check_*` results, so this is the one place that turns a
+    check's `OverloadStatus` into rendered text - it does not independently
+    re-derive Pass/Near-Limit/Fail/Not-Evaluated from the raw numbers. The
+    raw result objects are still read off the `RigEvaluation` for the
+    numbers themselves (actual/rating values) and for fields not yet
+    exposed via `EvaluatedCheck`, e.g. `near_limit_margin_lbs`.
 
-    `trailer_gvwr_result` is `None` whenever there's no linked Solo Ticket
-    for this Weigh Event - also reported as "not evaluated" rather than
-    hidden (see CONTEXT.md: Trailer GVWR Overload). When it's present and
-    `is_unverified` (a manually-adjusted Reused Solo Weight - see ADR 0006;
-    issue #16), it's labeled an Unverified Value the same way GCWR Overload
-    is above. When it's present and not overloaded but `is_near_limit`, an
-    extra "Near limit" line is shown (see ADR 0006) - never alongside an
-    OVERLOADED verdict. `time_gap_result`
-    is only present at all when a Solo Ticket was linked - unlike the
-    Overload checks it's advisory only and never labeled OVERLOADED/OK (see
+    `evaluation.gcwr_result` is `None` when the Truck Profile has no GCWR on
+    file - a distinct "not evaluated" state (see ADR 0002), reported without
+    blocking or hiding the other two checks. When it is present, GCWR
+    Overload depends on a manually-typed value with no photo/CAT Scale
+    Ticket backing it, so its result is labeled an Unverified Value (see
+    CONTEXT.md: Unverified Value).
+
+    `evaluation.trailer_gvwr_result` is `None` whenever there's no linked
+    Solo Ticket for this Weigh Event - also reported as "not evaluated"
+    rather than hidden (see CONTEXT.md: Trailer GVWR Overload). When it's
+    present and `is_unverified` (a manually-adjusted Reused Solo Weight -
+    see ADR 0006; issue #16), it's labeled an Unverified Value the same way
+    GCWR Overload is above. When it's present and not overloaded but
+    `is_near_limit`, an extra "Near limit" line is shown (see ADR 0006) -
+    never alongside an OVERLOADED verdict. `evaluation.time_gap_result` is
+    only present at all when a Solo Ticket was linked - unlike the Overload
+    checks it's advisory only and never labeled OVERLOADED/OK (see
     CONTEXT.md: Time-Gap Warning)."""
+    axle_result = evaluation.axle_result
+    gvwr_result = evaluation.hitched_gvwr_result
+    gcwr_result = evaluation.gcwr_result
+    trailer_gvwr_result = evaluation.trailer_gvwr_result
+    time_gap_result = evaluation.time_gap_result
+
     lines = ["=== Weigh Event Results ===", ""]
 
     lines.append("Axle Overload")
@@ -116,12 +109,13 @@ def format_weigh_event_results(
         "GVWR - this can happen even when neither axle is individually "
         "overloaded."
     )
-    verdict = "OVERLOADED" if gvwr_result.is_overloaded else "OK"
+    hitched_gvwr_overloaded = evaluation.hitched_gvwr.status == OverloadStatus.FAIL
+    verdict = "OVERLOADED" if hitched_gvwr_overloaded else "OK"
     lines.append(
         f"  Steer + Drive: {gvwr_result.combined_actual} lbs actual vs. "
         f"{gvwr_result.gvwr_rating} lbs rated -> {verdict}"
     )
-    if gvwr_result.is_overloaded:
+    if hitched_gvwr_overloaded:
         lines.append("  Result: Hitched GVWR Overload detected.")
     else:
         lines.append("  Result: no Hitched GVWR Overload detected.")
@@ -137,14 +131,15 @@ def format_weigh_event_results(
             "  Result: not evaluated - no GCWR on file for this Truck Profile."
         )
     else:
-        verdict = "OVERLOADED" if gcwr_result.is_overloaded else "OK"
+        gcwr_overloaded = evaluation.gcwr.status == OverloadStatus.FAIL
+        verdict = "OVERLOADED" if gcwr_overloaded else "OK"
         lines.append(
             f"  Gross Weight: {gcwr_result.combined_actual} lbs actual vs. "
             f"{gcwr_result.gcwr_rating} lbs rated (Unverified Value - GCWR is "
             f"manually entered, not backed by a photo or CAT Scale Ticket) "
             f"-> {verdict}"
         )
-        if gcwr_result.is_overloaded:
+        if gcwr_overloaded:
             lines.append("  Result: GCWR Overload detected.")
         else:
             lines.append("  Result: no GCWR Overload detected.")
@@ -161,7 +156,9 @@ def format_weigh_event_results(
             "  Result: not evaluated - no linked Solo Ticket for this Weigh Event."
         )
     else:
-        verdict = "OVERLOADED" if trailer_gvwr_result.is_overloaded else "OK"
+        trailer_gvwr_status = evaluation.trailer_gvwr.status
+        trailer_gvwr_overloaded = trailer_gvwr_status == OverloadStatus.FAIL
+        verdict = "OVERLOADED" if trailer_gvwr_overloaded else "OK"
         if trailer_gvwr_result.is_unverified:
             lines.append(
                 "  Derived Trailer Weight: "
@@ -176,12 +173,12 @@ def format_weigh_event_results(
                 f"{trailer_gvwr_result.derived_trailer_weight} lbs vs. "
                 f"{trailer_gvwr_result.gvwr_rating} lbs rated -> {verdict}"
             )
-        if trailer_gvwr_result.is_overloaded:
+        if trailer_gvwr_overloaded:
             lines.append("  Result: Trailer GVWR Overload detected.")
         else:
             lines.append("  Result: no Trailer GVWR Overload detected.")
-            if trailer_gvwr_result.is_near_limit:
-                margin = _trailer_gvwr_near_limit_margin_lbs(trailer_gvwr_result)
+            if trailer_gvwr_status == OverloadStatus.NEAR_LIMIT:
+                margin = trailer_gvwr_result.near_limit_margin_lbs
                 lines.append(
                     f"  Near limit: Derived Trailer Weight is within {margin} lbs "
                     "of the Trailer's GVWR."
@@ -231,12 +228,26 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
         if record.trailer_nickname is not None
         else f"Trailer Profile #{record.trailer_id}"
     )
+    # `rig_evaluation_from_record` runs the record's already-persisted raw
+    # results through the same `_assemble_rig_evaluation` fold
+    # `format_weigh_event_results` consumes, so this compact history
+    # rendering and that verbose per-Weigh-Event rendering derive their
+    # OVERLOADED/OK/Near-Limit verdicts from one place rather than each
+    # re-deriving them from the raw `is_overloaded`/`is_near_limit` values
+    # independently. The line format itself stays specific to this
+    # function - it renders one compact line per check rather than
+    # `format_weigh_event_results`'s labeled section with description text,
+    # so the two can't share print statements, only the status fold.
+    evaluation = rig_evaluation_from_record(record)
+
     lines = [f"[{record.timestamp}] {truck_label} + {trailer_label}"]
     lines.extend(f"  {line}" for line in _format_axle_check(record.axle_result))
     axle_verdict = "OVERLOADED" if record.axle_result.any_overloaded else "OK"
     lines.append(f"  Axle Overload: {axle_verdict}")
 
-    gvwr_verdict = "OVERLOADED" if record.gvwr_result.is_overloaded else "OK"
+    gvwr_verdict = (
+        "OVERLOADED" if evaluation.hitched_gvwr.status == OverloadStatus.FAIL else "OK"
+    )
     lines.append(
         f"  Hitched GVWR Overload: {record.gvwr_result.combined_actual} lbs actual "
         f"vs. {record.gvwr_result.gvwr_rating} lbs rated -> {gvwr_verdict}"
@@ -247,7 +258,9 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
             "  GCWR Overload: not evaluated - no GCWR on file for this Truck Profile."
         )
     else:
-        gcwr_verdict = "OVERLOADED" if record.gcwr_result.is_overloaded else "OK"
+        gcwr_verdict = (
+            "OVERLOADED" if evaluation.gcwr.status == OverloadStatus.FAIL else "OK"
+        )
         lines.append(
             f"  GCWR Overload: {record.gcwr_result.combined_actual} lbs actual "
             f"vs. {record.gcwr_result.gcwr_rating} lbs rated (Unverified Value) "
@@ -260,8 +273,9 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
             "for this Weigh Event."
         )
     else:
+        trailer_gvwr_status = evaluation.trailer_gvwr.status
         trailer_verdict = (
-            "OVERLOADED" if record.trailer_gvwr_result.is_overloaded else "OK"
+            "OVERLOADED" if trailer_gvwr_status == OverloadStatus.FAIL else "OK"
         )
         if record.trailer_gvwr_result.is_unverified:
             lines.append(
@@ -277,8 +291,8 @@ def _format_weigh_event_record(record: WeighEventRecord) -> list[str]:
                 f"{record.trailer_gvwr_result.gvwr_rating} lbs rated -> "
                 f"{trailer_verdict}"
             )
-        if record.trailer_gvwr_result.is_near_limit:
-            margin = _trailer_gvwr_near_limit_margin_lbs(record.trailer_gvwr_result)
+        if trailer_gvwr_status == OverloadStatus.NEAR_LIMIT:
+            margin = record.trailer_gvwr_result.near_limit_margin_lbs
             lines.append(
                 f"  Near limit: Derived Trailer Weight is within {margin} lbs of "
                 "the Trailer's GVWR."
