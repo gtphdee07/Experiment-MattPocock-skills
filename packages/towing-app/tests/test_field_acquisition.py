@@ -397,6 +397,32 @@ def test_scale_ticket_propose_text_returns_none_when_field_not_printed(
     assert source.propose_text("reweigh_reference") is None
 
 
+def test_scale_ticket_propose_text_strips_embedded_control_chars(
+    tmp_path: Path,
+) -> None:
+    photo_path = tmp_path / "ticket.jpg"
+    photo_path.write_bytes(b"fake-image-bytes")
+
+    def fake_vision_completion(image_b64: str, media_type: str) -> str:
+        #  is JSON's escape for ESC - json.loads decodes it to an
+        # actual embedded control character, same as a raw control byte
+        # smuggled through in model output (a literal control byte here
+        # would make this fixture invalid JSON, since JSON strings may not
+        # contain unescaped control characters). Only the ESC control
+        # character itself is stripped - the printable "[2J" that follows
+        # it (an ANSI escape sequence's parameters/final byte) is ordinary
+        # text and is preserved, same as any other printable character.
+        return (
+            '{"steer": 5640, "drive": 9080, "trailer_axle": 19680, "gross": 34400, '
+            '"timestamp": "7-12-26 10:10", '
+            '"reweigh_reference": "  1327\\u001b[2J426192434  "}'
+        )
+
+    source = ClaudeVisionScaleTicketFieldSource(photo_path, fake_vision_completion)
+
+    assert source.propose_text("reweigh_reference") == "1327[2J426192434"
+
+
 def test_scale_ticket_propose_returns_none_for_field_missing_from_extraction(
     tmp_path: Path,
 ) -> None:
