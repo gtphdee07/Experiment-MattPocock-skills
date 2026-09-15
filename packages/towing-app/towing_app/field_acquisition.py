@@ -12,10 +12,11 @@ import base64
 import json
 import logging
 import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import anthropic
-from anthropic.types import MessageParam
+from anthropic.types import ContentBlock, MessageParam
 
 from towing_core.field_acquisition import (
     AxleCountLookupFn,
@@ -32,6 +33,11 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# The one model id every Claude call in this module uses - vision extraction
+# and the web-search axle-count lookup alike. Kept as a single constant so
+# a model change is a one-line edit, not a grep-and-replace.
+_MODEL_ID = "claude-opus-5"
 
 _MEDIA_TYPES: dict[str, MediaType] = {
     ".jpg": "image/jpeg",
@@ -105,6 +111,21 @@ def _media_type_for(photo_path: Path) -> MediaType:
     return _MEDIA_TYPES.get(photo_path.suffix.lower(), "image/jpeg")
 
 
+def _last_text_block(content: Sequence[ContentBlock]) -> str:
+    """Picks the last text block out of a Claude response's content list.
+
+    A plain completion (no tools) always returns a single text block, so
+    "last" and "first" are the same block there. A tool-using completion
+    (e.g. the web-search axle-count lookup) can return intermediate
+    tool-use/tool-result blocks before the model's final answer, so "last"
+    is the one that matters - this one helper is correct for both cases.
+    """
+    for block in reversed(content):
+        if block.type == "text":
+            return block.text
+    return ""
+
+
 def _vision_completion(image_b64: str, media_type: MediaType, prompt: str) -> str:
     """Calls Claude with vision input. Requires ANTHROPIC_API_KEY in the env.
 
@@ -130,14 +151,11 @@ def _vision_completion(image_b64: str, media_type: MediaType, prompt: str) -> st
         }
     ]
     response = client.messages.create(
-        model="claude-opus-5",
+        model=_MODEL_ID,
         max_tokens=1024,
         messages=messages,
     )
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return ""
+    return _last_text_block(response.content)
 
 
 def _default_vision_completion(image_b64: str, media_type: MediaType) -> str:
@@ -162,15 +180,41 @@ def _default_axle_count_lookup(make: str, model: str) -> str:
     client = anthropic.Anthropic()
     prompt = _AXLE_COUNT_PROMPT_TEMPLATE.format(make=make, model=model)
     response = client.messages.create(
-        model="claude-opus-5",
+        model=_MODEL_ID,
         max_tokens=1024,
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
         messages=[{"role": "user", "content": prompt}],
     )
-    for block in reversed(response.content):
-        if block.type == "text":
-            return block.text
-    return ""
+    return _last_text_block(response.content)
+
+
+def _propose_via_claude(call: Callable[[], str], *, unavailable_context: str) -> str:
+    """Invokes `call` (an adapter's injected completion/lookup function) and
+    returns its raw text response, mapping a service-level failure to
+    `FieldSourceUnavailableError`.
+
+    Catches `anthropic.APIError` (network/auth/rate-limit failures once a
+    request is actually attempted) and `TypeError` (the bare exception the
+    SDK raises from `client.messages.create()` when no credentials resolve -
+    "Could not resolve authentication method...", not an `anthropic.*`
+    exception, so it must be caught here too or a missing key crashes the
+    CLI with a raw traceback).
+
+    Either way this is a *service*-level failure, not a content one - the
+    model never got a chance to read anything - so it's raised rather than
+    treated as a content miss (an all-None parse result), letting the
+    caller tell "couldn't reach the service" apart from "reached it, but
+    couldn't read this specific field."
+
+    `unavailable_context` is logged via `logger.exception` so the log line
+    identifies which adapter/target failed; it plays no part in the raised
+    exception's message, which is always `str(exc)`.
+    """
+    try:
+        return call()
+    except (anthropic.APIError, TypeError) as exc:
+        logger.exception(unavailable_context)
+        raise FieldSourceUnavailableError(str(exc)) from exc
 
 
 def _parse_tag_fields(
@@ -253,23 +297,12 @@ class ClaudeVisionTruckTagFieldSource:
         image_bytes = self._photo_path.read_bytes()
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         media_type = _media_type_for(self._photo_path)
-        try:
-            raw_text = self._vision_completion(image_b64, media_type)
-        except (anthropic.APIError, TypeError) as exc:
-            # anthropic.APIError covers network/auth/rate-limit failures once
-            # a request is actually attempted. A missing API key is different:
-            # the SDK raises a bare TypeError from client.messages.create()
-            # before any request goes out ("Could not resolve authentication
-            # method..."), not an anthropic.* exception, so it must be caught
-            # here too or a missing key crashes the CLI with a raw traceback.
-            #
-            # Either way this is a *service*-level failure, not a content
-            # one - the model never got a chance to read anything - so it's
-            # raised rather than folded into the all-None return below,
-            # letting the caller tell "couldn't reach the service" apart
-            # from "reached it, but couldn't read this specific field."
-            logger.exception("Claude vision extraction failed for %s", self._photo_path)
-            raise FieldSourceUnavailableError(str(exc)) from exc
+        raw_text = _propose_via_claude(
+            lambda: self._vision_completion(image_b64, media_type),
+            unavailable_context=(
+                f"Claude vision extraction failed for {self._photo_path}"
+            ),
+        )
         return _parse_truck_tag_fields(raw_text)
 
 
@@ -298,15 +331,12 @@ class ClaudeVisionTrailerTagFieldSource:
         image_bytes = self._photo_path.read_bytes()
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         media_type = _media_type_for(self._photo_path)
-        try:
-            raw_text = self._vision_completion(image_b64, media_type)
-        except (anthropic.APIError, TypeError) as exc:
-            # See ClaudeVisionTruckTagFieldSource._extract for why both
-            # anthropic.APIError and a bare TypeError are treated as
-            # service-level failures (raised) rather than content misses
-            # (folded into the all-None return below).
-            logger.exception("Claude vision extraction failed for %s", self._photo_path)
-            raise FieldSourceUnavailableError(str(exc)) from exc
+        raw_text = _propose_via_claude(
+            lambda: self._vision_completion(image_b64, media_type),
+            unavailable_context=(
+                f"Claude vision extraction failed for {self._photo_path}"
+            ),
+        )
         return _parse_trailer_tag_fields(raw_text)
 
 
@@ -356,15 +386,12 @@ class ClaudeVisionScaleTicketFieldSource:
         image_bytes = self._photo_path.read_bytes()
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
         media_type = _media_type_for(self._photo_path)
-        try:
-            raw_text = self._vision_completion(image_b64, media_type)
-        except (anthropic.APIError, TypeError) as exc:
-            # See ClaudeVisionTruckTagFieldSource._extract for why both
-            # anthropic.APIError and a bare TypeError are treated as
-            # service-level failures (raised) rather than content misses
-            # (folded into the all-None return below).
-            logger.exception("Claude vision extraction failed for %s", self._photo_path)
-            raise FieldSourceUnavailableError(str(exc)) from exc
+        raw_text = _propose_via_claude(
+            lambda: self._vision_completion(image_b64, media_type),
+            unavailable_context=(
+                f"Claude vision extraction failed for {self._photo_path}"
+            ),
+        )
         return _parse_scale_ticket_fields(raw_text)
 
 
@@ -399,16 +426,14 @@ class WebAxleCountFieldSource:
         return self._fields.get(field)
 
     def _extract(self) -> dict[str, float | None]:
-        try:
-            raw_text = self._lookup(self._make, self._model)
-        except (anthropic.APIError, TypeError) as exc:
-            # See ClaudeVisionTruckTagFieldSource._extract for why both
-            # anthropic.APIError and a bare TypeError are treated as
-            # service-level failures (raised) rather than a content miss
-            # (folded into the all-None return below) - per ADR 0003, any
-            # future external dependency follows this same split.
-            logger.exception(
-                "Axle-count lookup failed for %s %s", self._make, self._model
-            )
-            raise FieldSourceUnavailableError(str(exc)) from exc
+        # See _propose_via_claude for why anthropic.APIError and a bare
+        # TypeError are treated as service-level failures (raised) rather
+        # than a content miss (folded into the all-None return) - per ADR
+        # 0003, any future external dependency follows this same split.
+        raw_text = _propose_via_claude(
+            lambda: self._lookup(self._make, self._model),
+            unavailable_context=(
+                f"Axle-count lookup failed for {self._make} {self._model}"
+            ),
+        )
         return _parse_axle_count_fields(raw_text)
