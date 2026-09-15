@@ -363,3 +363,24 @@ def test_collect_reused_solo_ticket_adjusted_carries_rest_forward() -> None:
     assert solo.drive == PAST_SOLO.drive
     assert timestamp == PAST_TIMESTAMP
     assert is_unverified is True
+
+
+def test_collect_reused_solo_ticket_adjusted_reprompts_on_non_positive_gross() -> None:
+    """A sign-typo'd negative adjusted Gross Weight (issue #22) must
+    re-prompt for that field via the same retry loop `_prompt_until_valid`
+    already uses for an unparseable value, not be silently carried into the
+    replaced `SoloTicket` - see `_read_positive_float`. This is a regression
+    test: `solo_ticket.py` was extracted (#29) from a branch point before
+    #22's fix landed, so this call site briefly reverted to the
+    unvalidated `_read_float`."""
+    past = _past_record(truck_id=1, solo_ticket=PAST_SOLO)
+    responses = iter(["y", "-15000", "15000"])  # changed; rejected; accepted
+
+    def read(prompt: str) -> str:
+        return next(responses)
+
+    solo, timestamp, is_unverified = _collect_reused_solo_ticket(read, past)
+
+    assert solo == replace(PAST_SOLO, gross=15000)
+    assert timestamp == PAST_TIMESTAMP
+    assert is_unverified is True

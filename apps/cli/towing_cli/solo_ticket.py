@@ -24,6 +24,7 @@ from towing_cli.prompt import (
     _confirm,
     _read_float,
     _read_optional_str_with_default,
+    _read_positive_float,
 )
 from towing_core.calculations import TimeGapWarningResult, check_time_gap
 from towing_core.field_acquisition import TextFieldSource
@@ -113,7 +114,7 @@ def _collect_reused_solo_ticket(
         "Has anything changed since then (cargo, fuel, passengers)? [y/N]: ",
     )
     if changed:
-        new_gross = _read_float(
+        new_gross = _read_positive_float(
             read,
             "New Gross Weight for the Tow Vehicle, lbs (Unverified Value - not "
             "backed by a photo or CAT Scale Ticket): ",
