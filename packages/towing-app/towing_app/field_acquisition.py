@@ -11,6 +11,7 @@ saved; this module only concerns itself with proposing.
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 
 import anthropic
@@ -66,6 +67,13 @@ _TRAILER_EXTRACTION_PROMPT = (
 
 _SCALE_TICKET_NUMERIC_FIELDS = ("steer", "drive", "trailer_axle", "gross")
 _SCALE_TICKET_TEXT_FIELDS = ("timestamp", "reweigh_reference")
+
+# C0 and C1 control characters (including ESC, which starts ANSI escape
+# sequences) - stripped from model-returned free text before it's ever
+# stored or printed, since these fields (timestamp, reweigh_reference) are
+# rendered straight to the terminal via plain print() downstream (see
+# towing_cli.collect.determine_solo_link) with no further escaping.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 _SCALE_TICKET_EXTRACTION_PROMPT = (
     "This is a photo of a CAT Scale weigh ticket - either a Combined Ticket "
@@ -211,7 +219,8 @@ def _parse_scale_ticket_fields(raw_text: str) -> dict[str, float | str | None]:
         parsed[field] = float(value) if isinstance(value, int | float) else None
     for field in _SCALE_TICKET_TEXT_FIELDS:
         value = data.get(field)
-        stripped = value.strip() if isinstance(value, str) else ""
+        cleaned = _CONTROL_CHARS_RE.sub("", value) if isinstance(value, str) else ""
+        stripped = cleaned.strip()
         parsed[field] = stripped if stripped else None
     return parsed
 
