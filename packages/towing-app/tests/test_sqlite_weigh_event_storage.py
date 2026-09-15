@@ -1,9 +1,11 @@
+import sqlite3
 from pathlib import Path
 
 from towing_app.sqlite import SqliteWeighEventStore
 from towing_core.calculations import (
     AxleCheckResult,
     AxleOverloadResult,
+    GcwrOverloadResult,
     HitchedGvwrOverloadResult,
     TrailerGvwrOverloadResult,
 )
@@ -224,3 +226,95 @@ def test_save_and_list_round_trips_with_no_nickname_snapshots(tmp_path: Path) ->
     [saved] = SqliteWeighEventStore(db_path).list()
     assert saved.truck_nickname is None
     assert saved.trailer_nickname is None
+
+
+# --- Column-mapping regression (#28) ------------------------------------------
+#
+# `SqliteWeighEventStore.save`/`list` derive the INSERT/SELECT column lists
+# from one shared `_COLUMN_DEFS` source of truth (see class docstring), using
+# named row access/placeholders rather than positional indices. Every field
+# below is given a distinct, unmistakable value - no two columns share a
+# value - so that if `_COLUMN_DEFS` itself were ever accidentally reordered
+# (the one place left where a transposition could still happen), a value
+# would land under the wrong *column name* and this test would catch it as a
+# mismatch, not merely trust that "some value landed in some column".
+
+
+def test_save_writes_every_column_under_its_own_name(tmp_path: Path) -> None:
+    db_path = tmp_path / "garage.db"
+    record = WeighEventRecord(
+        truck_id=101,
+        trailer_id=202,
+        ticket=CombinedTicket(
+            steer=1001,
+            drive=2002,
+            trailer_axle=3003,
+            gross=4004,
+            reweigh_reference="RW-COMBINED",
+            timestamp="TICKET-TS",
+        ),
+        axle_result=AxleOverloadResult(
+            steer=AxleCheckResult(axle_name="Steer Axle", actual=1001, rating=1500),
+            drive=AxleCheckResult(axle_name="Drive Axle", actual=2002, rating=2500),
+            trailer=AxleCheckResult(axle_name="Trailer Axle", actual=3003, rating=3500),
+        ),
+        gvwr_result=HitchedGvwrOverloadResult(combined_actual=3003, gvwr_rating=5005),
+        timestamp="EVENT-TS",
+        gcwr_result=GcwrOverloadResult(combined_actual=4004, gcwr_rating=6006),
+        solo_ticket=SoloTicket(
+            steer=7007,
+            drive=8008,
+            gross=9009,
+            reweigh_reference="RW-SOLO",
+            timestamp="SOLO-TS",
+        ),
+        trailer_gvwr_result=TrailerGvwrOverloadResult(
+            derived_trailer_weight=4004 - 9009, gvwr_rating=10010, is_unverified=True
+        ),
+        time_gap_hours=11.011,
+        reused_solo_from_timestamp="REUSED-TS",
+        reused_solo_is_unverified=True,
+        truck_nickname="TRUCK-NICK",
+        trailer_nickname="TRAILER-NICK",
+    )
+    expected_by_column = {
+        "truck_id": 101,
+        "trailer_id": 202,
+        "steer": 1001,
+        "drive": 2002,
+        "trailer_axle": 3003,
+        "gross": 4004,
+        "steer_rating": 1500,
+        "drive_rating": 2500,
+        "trailer_rating": 3500,
+        "gvwr_rating": 5005,
+        "gcwr_rating": 6006,
+        "timestamp": "EVENT-TS",
+        "combined_reweigh_reference": "RW-COMBINED",
+        "solo_steer": 7007,
+        "solo_drive": 8008,
+        "solo_gross": 9009,
+        "solo_reweigh_reference": "RW-SOLO",
+        "trailer_gvwr_rating": 10010,
+        "time_gap_hours": 11.011,
+        "reused_solo_from_timestamp": "REUSED-TS",
+        "ticket_timestamp": "TICKET-TS",
+        "solo_timestamp": "SOLO-TS",
+        "reused_solo_is_unverified": 1,
+        "truck_nickname": "TRUCK-NICK",
+        "trailer_nickname": "TRAILER-NICK",
+    }
+    # Every value above must be distinct, or a transposition between two
+    # equal-valued columns would go undetected.
+    assert len(set(expected_by_column.values())) == len(expected_by_column)
+
+    SqliteWeighEventStore(db_path).save(record)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    [row] = conn.execute("SELECT * FROM weigh_events").fetchall()
+    conn.close()
+    for column, expected in expected_by_column.items():
+        assert row[column] == expected, (
+            f"column {column!r}: {row[column]!r} != {expected!r}"
+        )
