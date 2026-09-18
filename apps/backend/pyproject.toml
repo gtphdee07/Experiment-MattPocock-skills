@@ -5,6 +5,11 @@ description = "Towing Limit Checker: Phase 2 backend (Account registration/login
 requires-python = ">=3.12"
 dependencies = [
     "towing-core",
+    # Issue #20: the first backend feature needing the application-services
+    # tier, not just the compute tier - reuses towing_app.field_acquisition's
+    # ClaudeVision*/WebAxleCountFieldSource adapters (and, transitively,
+    # `anthropic`) unmodified, rather than reimplementing them here.
+    "towing-app",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "sqlalchemy>=2.0",
@@ -26,3 +31,4 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 towing-core = { workspace = true }
+towing-app = { workspace = true }

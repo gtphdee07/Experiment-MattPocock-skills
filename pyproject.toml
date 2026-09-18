@@ -33,10 +33,22 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 known-first-party = ["towing_core", "towing_app", "towing_cli", "towing_streamlit", "towing_backend"]
 
 [tool.ruff.lint.flake8-bugbear]
-# FastAPI's dependency-injection idiom is exactly `Depends(...)` as an
-# argument default (apps/backend); B008 exists to catch a real footgun in
-# general Python, but flags this pattern as a false positive.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends"]
+# FastAPI's dependency-injection idiom is exactly `Depends(...)`/`File(...)`/
+# `Form(...)`/`Query(...)` as an argument default (apps/backend); B008 exists
+# to catch a real footgun in general Python, but flags this pattern as a
+# false positive. `File`/`Form` added alongside `Depends` for issue #20's
+# multipart upload endpoints (`UploadFile = File(...)`, a ticket-type form
+# field).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "fastapi.File",
+    "fastapi.params.File",
+    "fastapi.Form",
+    "fastapi.params.Form",
+    "fastapi.Query",
+    "fastapi.params.Query",
+]
 
 [dependency-groups]
 dev = [

@@ -114,9 +114,11 @@ diff, making a time-based backstop redundant with something now
 enforced mechanically instead of remembered.
 
 Existing instances: `test_real_photo_smoke.py`, `test_real_trailer_photo_smoke.py`,
-`test_real_scale_ticket_photo_smoke.py` — all prefixed `test_real_*`,
-excluded from the default `-k "not real"` gate, run only when explicitly
-invoked and credentials/credit are available.
+`test_real_scale_ticket_photo_smoke.py` (adapter-level, `packages/towing-app`),
+and `apps/backend/tests/test_real_photo_ocr_endpoints.py` (issue #20's
+HTTP-level contract bench for the same four adapters, one layer up) — all
+prefixed `test_real_*`, excluded from the default `-k "not real"` gate, run
+only when explicitly invoked and credentials/credit are available.
 
 ## Regression scoping
 
@@ -132,7 +134,7 @@ that member's own tests plus every member that transitively depends on it:
 | Changed member | Also run (dependents) |
 |---|---|
 | `packages/towing-core` | `packages/towing-app`, `apps/cli`, `apps/streamlit`, `apps/backend` |
-| `packages/towing-app` | `apps/cli` |
+| `packages/towing-app` | `apps/cli`, `apps/backend` |
 | `apps/cli` | — |
 | `apps/streamlit` | — |
 | `apps/backend` | — |
