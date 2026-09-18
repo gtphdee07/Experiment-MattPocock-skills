@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from towing_backend.db import make_engine, make_session_factory
 from towing_backend.migrate import run_migrations
 from towing_backend.models import Account, AccountSession
+from towing_backend.profiles_routes import build_profile_router
 from towing_backend.schemas import AccountCreate, AccountRead, AccountUpdate
 from towing_backend.settings import Settings, load_settings
 from towing_backend.users import AccountManager
@@ -139,6 +140,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fastapi_users.get_users_router(AccountRead, AccountUpdate),
         prefix="/users",
         tags=["users"],
+    )
+
+    # Issue #19: Truck/Trailer Profile CRUD, scoped to the caller's own
+    # Garage via the same `current_active_account`/`get_async_session`
+    # dependencies the Account routes above already use.
+    app.include_router(
+        build_profile_router(
+            current_active_account=current_active_account,
+            get_async_session=get_async_session,
+        ),
+        tags=["profiles"],
     )
 
     @app.get("/api/health", tags=["health"])

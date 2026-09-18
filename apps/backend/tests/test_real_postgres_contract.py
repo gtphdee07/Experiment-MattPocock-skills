@@ -3,6 +3,12 @@ schema/constraint operations as tier 2, run against an actual Postgres
 instance instead of SQLite - migrate via Alembic, insert an Account + its
 Garage, exercise both unique constraints, exercise the cascade delete.
 
+Extended by issue #19 to cover `truck_profiles`/`trailer_profiles` the same
+way - insert, the `garage_id` foreign key, and the Account -> Garage ->
+Profiles cascade delete - in this same file rather than a second Postgres
+bench (Testing Decisions: "extends #18's Postgres bench to cover these two
+new tables instead of standing up a second one").
+
 Excluded from the default `-k "not real"` loop, same convention as
 `packages/towing-app/tests/test_real_*_photo_smoke.py`. Skipped
 (`pytest.mark.skipif`, not a hard failure) when
@@ -25,14 +31,20 @@ import asyncio
 import os
 import uuid
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from sqlalchemy import delete, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from towing_backend.db import garages, make_engine, make_session_factory
+from towing_backend.db import (
+    garages,
+    make_engine,
+    make_session_factory,
+    trailer_profiles,
+    truck_profiles,
+)
 from towing_backend.migrate import run_migrations
 from towing_backend.models import Account
 
@@ -161,5 +173,132 @@ def test_real_deleting_account_cascades_to_garage() -> None:
                 )
             ).all()
             assert remaining == []
+
+    run(body())
+
+
+# --- Issue #19: truck_profiles / trailer_profiles --------------------------
+
+
+class _AccountGarage(NamedTuple):
+    account_id: int
+    garage_id: int
+
+
+async def _insert_account_and_garage(session: AsyncSession) -> _AccountGarage:
+    account_id = await _insert_account(session, email=_unique_email())
+    garage_id = (
+        await session.execute(
+            insert(garages).values(account_id=account_id).returning(garages.c.id)
+        )
+    ).scalar_one()
+    await session.commit()
+    return _AccountGarage(account_id=account_id, garage_id=garage_id)
+
+
+def test_real_insert_truck_and_trailer_profile_round_trip() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session)
+
+            await session.execute(
+                insert(truck_profiles).values(
+                    garage_id=owner.garage_id,
+                    gvwr=10000.0,
+                    front_gawr=4500.0,
+                    rear_gawr=6500.0,
+                )
+            )
+            await session.execute(
+                insert(trailer_profiles).values(
+                    garage_id=owner.garage_id, gvwr=8000.0, gawr=3500.0, axle_count=2
+                )
+            )
+            await session.commit()
+
+            truck_row = (
+                await session.execute(
+                    select(truck_profiles).where(
+                        truck_profiles.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert truck_row.gvwr == 10000.0
+            assert truck_row.gcwr is None
+
+            trailer_row = (
+                await session.execute(
+                    select(trailer_profiles).where(
+                        trailer_profiles.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert trailer_row.axle_count == 2
+            assert trailer_row.uvw is None
+
+    run(body())
+
+
+def test_real_truck_profile_with_nonexistent_garage_violates_foreign_key() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    insert(truck_profiles).values(
+                        garage_id=999999,
+                        gvwr=10000.0,
+                        front_gawr=4500.0,
+                        rear_gawr=6500.0,
+                    )
+                )
+                await session.commit()
+
+    run(body())
+
+
+def test_real_deleting_account_cascades_to_truck_and_trailer_profiles() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session)
+            await session.execute(
+                insert(truck_profiles).values(
+                    garage_id=owner.garage_id,
+                    gvwr=10000.0,
+                    front_gawr=4500.0,
+                    rear_gawr=6500.0,
+                )
+            )
+            await session.execute(
+                insert(trailer_profiles).values(
+                    garage_id=owner.garage_id, gvwr=8000.0, gawr=3500.0, axle_count=2
+                )
+            )
+            await session.commit()
+
+            await session.execute(delete(Account).where(Account.id == owner.account_id))
+            await session.commit()
+
+            remaining_trucks = (
+                await session.execute(
+                    select(truck_profiles).where(
+                        truck_profiles.c.garage_id == owner.garage_id
+                    )
+                )
+            ).all()
+            remaining_trailers = (
+                await session.execute(
+                    select(trailer_profiles).where(
+                        trailer_profiles.c.garage_id == owner.garage_id
+                    )
+                )
+            ).all()
+            assert remaining_trucks == []
+            assert remaining_trailers == []
 
     run(body())

@@ -1,15 +1,18 @@
-"""Async SQLAlchemy engine/session plumbing, plus the `garages` Core table.
+"""Async SQLAlchemy engine/session plumbing, plus the `garages`,
+`truck_profiles`, and `trailer_profiles` Core tables.
 
 `Account`/`AccountSession` (see `towing_backend.models`) are ORM-mapped
 declarative classes - that shape is forced on them by fastapi-users' own
-SQLAlchemy adapter, which subclasses `Mapped`/`mapped_column`. `garages`
-stays a plain SQLAlchemy Core `Table`, queried directly with Core
-`insert`/`select`/`delete` statements (see `towing_backend.garages`) rather
-than the ORM, per ADR 0011's "SQLAlchemy Core, not the full ORM" decision -
-this is the one table in this schema that decision was actually free to
-apply to. Both live on the same `MetaData` (`Base.metadata`) so Alembic and
-`create_all` see every table together, and so `garages.account_id`'s
-`ForeignKey("accounts.id")` resolves correctly regardless of import order.
+SQLAlchemy adapter, which subclasses `Mapped`/`mapped_column`. `garages`,
+`truck_profiles`, and `trailer_profiles` stay plain SQLAlchemy Core
+`Table`s, queried directly with Core `insert`/`select`/`update`/`delete`
+statements (see `towing_backend.garages`, `towing_backend.truck_profiles`,
+`towing_backend.trailer_profiles`) rather than the ORM, per ADR 0011's
+"SQLAlchemy Core, not the full ORM" decision - these are the tables in this
+schema that decision was actually free to apply to. All live on the same
+`MetaData` (`Base.metadata`) so Alembic and `create_all` see every table
+together, and so their `ForeignKey(...)` columns resolve correctly
+regardless of import order.
 """
 
 from __future__ import annotations
@@ -17,9 +20,11 @@ from __future__ import annotations
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     MetaData,
+    String,
     Table,
     event,
     func,
@@ -56,6 +61,47 @@ garages = Table(
         nullable=False,
         server_default=func.now(),
     ),
+)
+
+# Issue #19: field-for-field matches to `towing_core.models.TruckProfile` /
+# `TrailerProfile` plus the new `garage_id` FK - see that module's
+# docstrings for why each field is optional or required. No `created_at`:
+# the issue's persisted-schema decision lists only the domain fields plus
+# `garage_id`, not an audit timestamp.
+truck_profiles = Table(
+    "truck_profiles",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "garage_id",
+        Integer,
+        ForeignKey("garages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("gvwr", Float, nullable=False),
+    Column("front_gawr", Float, nullable=False),
+    Column("rear_gawr", Float, nullable=False),
+    Column("gcwr", Float, nullable=True),
+    Column("nickname", String(255), nullable=True),
+)
+
+trailer_profiles = Table(
+    "trailer_profiles",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "garage_id",
+        Integer,
+        ForeignKey("garages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("gvwr", Float, nullable=False),
+    Column("gawr", Float, nullable=False),
+    Column("axle_count", Integer, nullable=False),
+    Column("uvw", Float, nullable=True),
+    Column("nickname", String(255), nullable=True),
 )
 
 
