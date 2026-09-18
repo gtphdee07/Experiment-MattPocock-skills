@@ -3,8 +3,10 @@
 Kept separate from the ORM-mapped `towing_backend.models` on purpose -
 `garages` is the one table this spec doesn't force into fastapi-users'
 declarative style, so it's queried with plain SQLAlchemy Core statements
-(ADR 0011). One Garage per Account, created atomically on registration via
-`towing_backend.users.AccountManager.on_after_register`.
+(ADR 0011). One Garage per Account, created on registration via
+`towing_backend.users.AccountManager.on_after_register` — see that
+method's own docstring for why this isn't atomic with the Account row's
+own creation.
 """
 
 from __future__ import annotations

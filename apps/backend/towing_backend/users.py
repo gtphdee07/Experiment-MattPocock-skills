@@ -21,8 +21,17 @@ class AccountManager(IntegerIDMixin, BaseUserManager[Account, int]):
 
     Takes the same `AsyncSession` the request's `SQLAlchemyUserDatabase` is
     using (rather than reaching into `user_db.session`, an implementation
-    detail of that adapter) so `on_after_register`'s Garage insert commits
-    in the same request/transaction as the Account row it depends on.
+    detail of that adapter), so `on_after_register`'s Garage insert reuses
+    the same request/session as the Account row it depends on. Not the same
+    *transaction*, though: `SQLAlchemyUserDatabase.create()` commits the
+    Account row itself before `on_after_register` ever runs, so the Garage
+    insert below is a second, separate commit. A crash in the narrow window
+    between those two commits would leave an Account with no Garage,
+    breaking issue #18's "always exactly one Garage" guarantee — a known,
+    accepted gap (avoiding it would mean reimplementing `create()`'s
+    password-hashing/validation logic, against ADR 0011's own reason for
+    choosing this library). Worth a reconciliation check later if this is
+    ever actually observed.
     """
 
     def __init__(
@@ -34,7 +43,7 @@ class AccountManager(IntegerIDMixin, BaseUserManager[Account, int]):
         super().__init__(user_db)
         self._session = session
         # Deferred features (ADR 0011 consequence) still require these
-        # attributes to be set - ADR 0018 Story 21 keeps email
+        # attributes to be set - issue #18 Story 21 keeps email
         # verification/password-reset explicitly deferred, not silently
         # dropped, so these secrets exist but no route ever sends the mail.
         self.reset_password_token_secret = secret
