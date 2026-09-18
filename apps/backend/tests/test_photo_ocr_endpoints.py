@@ -11,6 +11,7 @@ existing fake-based pattern per issue #20's own Testing Decisions.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from towing_backend.app import create_app
-from towing_backend.photo_ocr import PhotoOCRDependencies
+from towing_backend.photo_ocr import (
+    MAX_UPLOAD_BYTES,
+    PhotoOCRDependencies,
+    _read_and_validate_photo,
+)
 from towing_backend.settings import Settings
 from towing_core.field_acquisition import FieldSourceUnavailableError
 
@@ -174,6 +179,55 @@ def test_trucks_from_photo_rejects_unsupported_file_type(client_factory: Any) ->
         files={"file": ("tag.txt", b"not a photo", "text/plain")},
     )
     assert error_response.status_code == 422
+
+
+class _FakeUploadFile:
+    """A duck-typed stand-in for `fastapi.UploadFile` that serves bytes in
+    fixed-size chunks via `read(size)`, so `_read_and_validate_photo`'s
+    chunked-read loop (#34) can be tested directly without going through a
+    real HTTP request - `TestClient` fully buffers a request body client-
+    side regardless of how the server reads it, so an HTTP-level test alone
+    could never prove the server-side loop actually stops early."""
+
+    def __init__(self, content_type: str, body: bytes) -> None:
+        self.content_type = content_type
+        self._body = body
+        self._offset = 0
+        self.read_calls: list[int] = []
+
+    async def read(self, size: int = -1) -> bytes:
+        self.read_calls.append(size)
+        assert size > 0, "must read in bounded chunks, never read()-everything"
+        chunk = self._body[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def test_read_and_validate_photo_aborts_before_reading_the_whole_oversized_body() -> (
+    None
+):
+    # One byte past the limit, but "long" enough that reading it all in one
+    # unbounded call would be the naive (and, per #34, memory-unsafe) thing
+    # to do - the body is deliberately much larger than the limit so a
+    # bug that reads-to-completion-then-checks would read far more than a
+    # bug that aborts as soon as the cumulative size crosses the limit.
+    huge_body = b"x" * (MAX_UPLOAD_BYTES * 4)
+    fake_file = _FakeUploadFile("image/jpeg", huge_body)
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(_read_and_validate_photo(fake_file))  # type: ignore[arg-type]
+
+    assert getattr(exc_info.value, "status_code", None) == 413
+
+    bytes_actually_read = sum(
+        min(call_size, len(huge_body)) for call_size in fake_file.read_calls
+    )
+    # The whole point of #34: never buffer the entire oversized body before
+    # rejecting it. A generous margin above MAX_UPLOAD_BYTES (rather than an
+    # exact chunk-size assertion) keeps this test from being coupled to the
+    # implementation's specific chunk size, while still failing hard against
+    # a regression back to "read everything, then check the length."
+    assert bytes_actually_read < MAX_UPLOAD_BYTES * 2
 
 
 def test_trucks_from_photo_rejects_oversized_upload(client_factory: Any) -> None:

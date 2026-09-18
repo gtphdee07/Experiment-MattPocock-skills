@@ -7,10 +7,13 @@ framework this small service doesn't need.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DB_URL_ENV_VAR = "TOWING_BACKEND_DB_URL"
 CORS_ORIGIN_ENV_VAR = "TOWING_BACKEND_CORS_ORIGIN"
@@ -43,4 +46,15 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     database_url = env.get(DB_URL_ENV_VAR) or f"sqlite+aiosqlite:///{DEFAULT_DB_PATH}"
     cors_origin = env.get(CORS_ORIGIN_ENV_VAR) or DEFAULT_CORS_ORIGIN
     secret = env.get(SECRET_ENV_VAR) or DEFAULT_SECRET
+    if secret == DEFAULT_SECRET:
+        # #33: a silent fallback here means every reset-password/
+        # verification token gets signed with a value that's public (it's
+        # in the repo) - fine for local dev, a real footgun for a deploy
+        # that simply forgot to set the real one. Loud on purpose.
+        logger.warning(
+            "%s is not set - falling back to the insecure development "
+            "secret. Do not run this in production without setting a real "
+            "secret.",
+            SECRET_ENV_VAR,
+        )
     return Settings(database_url=database_url, cors_origin=cors_origin, secret=secret)

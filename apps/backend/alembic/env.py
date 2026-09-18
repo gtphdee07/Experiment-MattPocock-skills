@@ -26,7 +26,14 @@ from towing_backend.models import Account, AccountSession  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers` defaults to True, which would silently
+    # disable every logger created before this call (including any of
+    # `towing_backend`'s own, e.g. `settings.py`'s startup warning) -
+    # `run_migrations` runs on every `create_app()` call, not just via the
+    # standalone `alembic` CLI, so this must not clobber application
+    # logging each time. Alembic's own docs call this out as the fix for
+    # exactly this embedded/programmatic-use case.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

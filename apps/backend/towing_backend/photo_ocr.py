@@ -74,6 +74,10 @@ from towing_core.field_acquisition import (
 # issue and ADR 0011's existing upload-size deferral; 10 MB comfortably
 # covers a phone-camera JPEG of a tag or ticket without being an open door.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# #34: the size the request body is read in, so an oversized upload is
+# rejected once the running total crosses `MAX_UPLOAD_BYTES` rather than
+# only after the entire body has already been buffered into memory.
+_READ_CHUNK_BYTES = 1 * 1024 * 1024
 
 _ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(_MEDIA_TYPES.values())
 
@@ -248,14 +252,26 @@ async def _read_and_validate_photo(file: UploadFile) -> tuple[bytes, str]:
                 + ", ".join(sorted(_ALLOWED_CONTENT_TYPES))
             ),
         )
-    image_bytes = await file.read()
-    if len(image_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"File too large. Maximum size is {MAX_UPLOAD_BYTES} bytes.",
-        )
+
+    # #34: read in bounded chunks and abort as soon as the running total
+    # exceeds the limit, rather than buffering the whole (possibly huge)
+    # body into memory before ever checking its size.
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"File too large. Maximum size is {MAX_UPLOAD_BYTES} bytes.",
+            )
+        chunks.append(chunk)
+
     suffix = _EXTENSION_BY_CONTENT_TYPE[content_type]
-    return image_bytes, suffix
+    return b"".join(chunks), suffix
 
 
 def build_photo_ocr_router(
