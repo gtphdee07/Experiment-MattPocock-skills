@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from towing_backend.app import create_app
@@ -214,10 +214,10 @@ def test_read_and_validate_photo_aborts_before_reading_the_whole_oversized_body(
     huge_body = b"x" * (MAX_UPLOAD_BYTES * 4)
     fake_file = _FakeUploadFile("image/jpeg", huge_body)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(HTTPException) as exc_info:
         asyncio.run(_read_and_validate_photo(fake_file))  # type: ignore[arg-type]
 
-    assert getattr(exc_info.value, "status_code", None) == 413
+    assert exc_info.value.status_code == 413
 
     bytes_actually_read = sum(
         min(call_size, len(huge_body)) for call_size in fake_file.read_calls
