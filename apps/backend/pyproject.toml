@@ -23,6 +23,13 @@ dependencies = [
     # "Synchronous endpoints" bullet was written before checking that.
     "aiosqlite>=0.20",
     "asyncpg>=0.29",
+    # Issue #21: `towing_app.services.record_weigh_event` is reused
+    # unmodified and is fully synchronous - it needs a synchronous
+    # SQLAlchemy engine (towing_backend.sync_db), separate from the async
+    # engine every other table above uses. `asyncpg` has no sync mode, so
+    # Postgres needs its own sync-capable driver for that second engine;
+    # SQLite's sync dialect needs no separate driver (stdlib `sqlite3`).
+    "psycopg2-binary>=2.9",
 ]
 
 [build-system]

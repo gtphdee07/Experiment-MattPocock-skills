@@ -18,6 +18,7 @@ regardless of import order.
 from __future__ import annotations
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -27,6 +28,7 @@ from sqlalchemy import (
     String,
     Table,
     event,
+    false,
     func,
 )
 from sqlalchemy.ext.asyncio import (
@@ -102,6 +104,60 @@ trailer_profiles = Table(
     Column("axle_count", Integer, nullable=False),
     Column("uvw", Float, nullable=True),
     Column("nickname", String(255), nullable=True),
+)
+
+# Issue #21: field-for-field matches `towing_app.sqlite.SqliteWeighEventStore
+# ._COLUMN_DEFS` plus the new `garage_id` FK (Implementation Decisions: "the
+# backend's own account-scoped persistence, per ADR 0010, not a
+# reimplementation of WeighEventStore's Protocol"). `truck_id`/`trailer_id`
+# are deliberately plain columns with no FK to `truck_profiles`/
+# `trailer_profiles` - mirroring `SqliteWeighEventStore`'s own schema, and
+# consistent with ADR 0004's snapshot-Nickname design, which is built
+# specifically to keep rendering a past Weigh Event safe even after its
+# Truck/Trailer Profile has been deleted. A hard FK here would force a
+# cascade-or-block decision on Truck/Trailer Profile deletion that #19 never
+# specified and this issue doesn't ask for.
+weigh_events = Table(
+    "weigh_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "garage_id",
+        Integer,
+        ForeignKey("garages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("truck_id", Integer, nullable=False),
+    Column("trailer_id", Integer, nullable=False),
+    Column("steer", Float, nullable=False),
+    Column("drive", Float, nullable=False),
+    Column("trailer_axle", Float, nullable=False),
+    Column("gross", Float, nullable=False),
+    Column("steer_rating", Float, nullable=False),
+    Column("drive_rating", Float, nullable=False),
+    Column("trailer_rating", Float, nullable=False),
+    Column("gvwr_rating", Float, nullable=False),
+    Column("gcwr_rating", Float, nullable=True),
+    Column("timestamp", String, nullable=False),
+    Column("combined_reweigh_reference", String, nullable=True),
+    Column("solo_steer", Float, nullable=True),
+    Column("solo_drive", Float, nullable=True),
+    Column("solo_gross", Float, nullable=True),
+    Column("solo_reweigh_reference", String, nullable=True),
+    Column("trailer_gvwr_rating", Float, nullable=True),
+    Column("time_gap_hours", Float, nullable=True),
+    Column("reused_solo_from_timestamp", String, nullable=True),
+    Column("ticket_timestamp", String, nullable=True),
+    Column("solo_timestamp", String, nullable=True),
+    Column(
+        "reused_solo_is_unverified",
+        Boolean,
+        nullable=False,
+        server_default=false(),
+    ),
+    Column("truck_nickname", String, nullable=True),
+    Column("trailer_nickname", String, nullable=True),
 )
 
 

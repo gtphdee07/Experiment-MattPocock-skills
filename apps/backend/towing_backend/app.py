@@ -39,7 +39,9 @@ from towing_backend.photo_ocr import PhotoOCRDependencies, build_photo_ocr_route
 from towing_backend.profiles_routes import build_profile_router
 from towing_backend.schemas import AccountCreate, AccountRead, AccountUpdate
 from towing_backend.settings import Settings, load_settings
+from towing_backend.sync_db import make_sync_engine, make_sync_session_factory
 from towing_backend.users import AccountManager
+from towing_backend.weigh_events_routes import build_weigh_events_router
 
 COOKIE_NAME = "towing_backend_session"
 # Two weeks - a reasonable v1 default; not a value the issue grilled.
@@ -56,6 +58,13 @@ def create_app(
 
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
+
+    # Issue #21: a second, synchronous engine/session factory pointed at the
+    # same database, for `towing_app.services.record_weigh_event` (reused
+    # unmodified, fully synchronous) - never the async engine above. See
+    # `towing_backend.sync_db`'s module docstring.
+    sync_engine = make_sync_engine(settings.database_url)
+    sync_session_factory = make_sync_session_factory(sync_engine)
 
     async def get_async_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -166,6 +175,18 @@ def create_app(
     # a signed-in Account.
     app.include_router(
         build_photo_ocr_router(current_active_account, photo_ocr_dependencies)
+    )
+
+    # Issue #21: Weigh Event creation and history, scoped to the caller's
+    # own Garage via the same dependencies every other protected route above
+    # uses.
+    app.include_router(
+        build_weigh_events_router(
+            current_active_account=current_active_account,
+            get_async_session=get_async_session,
+            sync_session_factory=sync_session_factory,
+        ),
+        tags=["weigh-events"],
     )
 
     @app.get("/api/health", tags=["health"])

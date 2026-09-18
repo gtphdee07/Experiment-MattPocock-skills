@@ -44,6 +44,7 @@ from towing_backend.db import (
     make_session_factory,
     trailer_profiles,
     truck_profiles,
+    weigh_events,
 )
 from towing_backend.migrate import run_migrations
 from towing_backend.models import Account
@@ -300,5 +301,92 @@ def test_real_deleting_account_cascades_to_truck_and_trailer_profiles() -> None:
             ).all()
             assert remaining_trucks == []
             assert remaining_trailers == []
+
+    run(body())
+
+
+# --- Issue #21: weigh_events -------------------------------------------------
+
+_WEIGH_EVENT_VALUES: dict[str, Any] = {
+    "truck_id": 1,
+    "trailer_id": 1,
+    "steer": 4000.0,
+    "drive": 6000.0,
+    "trailer_axle": 6500.0,
+    "gross": 16500.0,
+    "steer_rating": 4500.0,
+    "drive_rating": 6500.0,
+    "trailer_rating": 7000.0,
+    "gvwr_rating": 10000.0,
+    "timestamp": "2026-09-18T00:00:00+00:00",
+}
+
+
+def test_real_insert_weigh_event_round_trip() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session)
+
+            await session.execute(
+                insert(weigh_events).values(
+                    garage_id=owner.garage_id, **_WEIGH_EVENT_VALUES
+                )
+            )
+            await session.commit()
+
+            row = (
+                await session.execute(
+                    select(weigh_events).where(
+                        weigh_events.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert row.gross == 16500.0
+            assert row.gcwr_rating is None
+            assert row.reused_solo_is_unverified is False
+
+    run(body())
+
+
+def test_real_weigh_event_with_nonexistent_garage_violates_foreign_key() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    insert(weigh_events).values(garage_id=999999, **_WEIGH_EVENT_VALUES)
+                )
+                await session.commit()
+
+    run(body())
+
+
+def test_real_deleting_account_cascades_to_weigh_events() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session)
+            await session.execute(
+                insert(weigh_events).values(
+                    garage_id=owner.garage_id, **_WEIGH_EVENT_VALUES
+                )
+            )
+            await session.commit()
+
+            await session.execute(delete(Account).where(Account.id == owner.account_id))
+            await session.commit()
+
+            remaining = (
+                await session.execute(
+                    select(weigh_events).where(
+                        weigh_events.c.garage_id == owner.garage_id
+                    )
+                )
+            ).all()
+            assert remaining == []
 
     run(body())
