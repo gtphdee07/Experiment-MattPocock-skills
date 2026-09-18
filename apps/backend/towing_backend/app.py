@@ -4,7 +4,9 @@ Wires fastapi-users' session-cookie auth (registration, login, logout,
 `GET/PATCH /users/me`) onto the `Account`/`AccountSession` tables, adds the
 one custom route fastapi-users doesn't ship by default - a self-service
 `DELETE /users/me` (its own built-in `DELETE /users/{id}` is
-superuser-on-other-accounts only) - and exposes an unauthenticated
+superuser-on-other-accounts only) - registers issue #20's session-
+authenticated photo-OCR/axle-count-lookup proposal endpoints (see
+`towing_backend.photo_ocr`), and exposes an unauthenticated
 `GET /api/health`, carrying forward the CORS/health conventions from
 `docs/design/web/api/main.py`.
 
@@ -33,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from towing_backend.db import make_engine, make_session_factory
 from towing_backend.migrate import run_migrations
 from towing_backend.models import Account, AccountSession
+from towing_backend.photo_ocr import PhotoOCRDependencies, build_photo_ocr_router
 from towing_backend.schemas import AccountCreate, AccountRead, AccountUpdate
 from towing_backend.settings import Settings, load_settings
 from towing_backend.users import AccountManager
@@ -42,7 +45,10 @@ COOKIE_NAME = "towing_backend_session"
 SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 14
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    photo_ocr_dependencies: PhotoOCRDependencies | None = None,
+) -> FastAPI:
     settings = settings if settings is not None else load_settings()
 
     run_migrations(settings.database_url)
@@ -139,6 +145,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fastapi_users.get_users_router(AccountRead, AccountUpdate),
         prefix="/users",
         tags=["users"],
+    )
+
+    # Issue #20: photo-OCR / axle-count-lookup proposal endpoints. Session-
+    # authenticated via the same `current_active_account` dependency as
+    # every other protected route above, despite writing nothing to any
+    # Account's data - required to keep the real-Anthropic-API spend behind
+    # a signed-in Account.
+    app.include_router(
+        build_photo_ocr_router(current_active_account, photo_ocr_dependencies)
     )
 
     @app.get("/api/health", tags=["health"])
