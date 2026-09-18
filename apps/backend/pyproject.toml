@@ -1,0 +1,28 @@
+[project]
+name = "towing-backend"
+version = "0.1.0"
+description = "Towing Limit Checker: Phase 2 backend (Account registration/login/session auth, Garage auto-provisioning)"
+requires-python = ">=3.12"
+dependencies = [
+    "towing-core",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "fastapi-users[sqlalchemy]>=14.0",
+    "pydantic>=2.0",
+    # Async DB drivers: fastapi-users' SQLAlchemy adapter (>=6) is
+    # async-only (fastapi_users_db_sqlalchemy.SQLAlchemyUserDatabase takes
+    # an AsyncSession), so both the SQLite (dev/test) and Postgres
+    # (production) engines need their async driver even though ADR 0011's
+    # "Synchronous endpoints" bullet was written before checking that.
+    "aiosqlite>=0.20",
+    "asyncpg>=0.29",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+towing-core = { workspace = true }

@@ -1,0 +1,165 @@
+"""Tier 3 (real-Postgres contract bench, `test_real_*`): the same
+schema/constraint operations as tier 2, run against an actual Postgres
+instance instead of SQLite - migrate via Alembic, insert an Account + its
+Garage, exercise both unique constraints, exercise the cascade delete.
+
+Excluded from the default `-k "not real"` loop, same convention as
+`packages/towing-app/tests/test_real_*_photo_smoke.py`. Skipped
+(`pytest.mark.skipif`, not a hard failure) when
+`TOWING_BACKEND_TEST_POSTGRES_URL` isn't set - a missing local Postgres is
+the expected common case in this environment, not a broken one (issue #18's
+Testing Decisions, explicitly contrasting this with the photo-smoke tests'
+"fails loudly when creds are missing" behavior).
+
+This tier exists specifically to catch SQLite/Postgres dialect drift (e.g.
+the `PRAGMA foreign_keys=ON` SQLite needs for `ON DELETE CASCADE` to do
+anything at all - see `towing_backend.db.make_engine` - is a no-op on
+Postgres, which enforces FKs unconditionally) before production does, and
+doubles as the contract-validation bench for ever swapping the database
+provider.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+from collections.abc import Coroutine
+from typing import Any
+
+import pytest
+from sqlalchemy import delete, insert, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from towing_backend.db import garages, make_engine, make_session_factory
+from towing_backend.migrate import run_migrations
+from towing_backend.models import Account
+
+POSTGRES_URL_ENV_VAR = "TOWING_BACKEND_TEST_POSTGRES_URL"
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get(POSTGRES_URL_ENV_VAR),
+    reason=(
+        f"requires a real Postgres instance - set {POSTGRES_URL_ENV_VAR} "
+        "(e.g. to a local Docker container's URL) to run this bench"
+    ),
+)
+
+
+def run(coro: Coroutine[Any, Any, None]) -> None:
+    asyncio.run(coro)
+
+
+def _postgres_url() -> str:
+    url = os.environ[POSTGRES_URL_ENV_VAR]
+    # Normalize to the async driver this backend uses everywhere else,
+    # regardless of how the URL was supplied.
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+def _make_session() -> AsyncSession:
+    # Must run before any event loop exists in this thread - see
+    # test_persistence_accounts_garages.py's `_make_session` docstring.
+    url = _postgres_url()
+    run_migrations(url)
+    engine = make_engine(url)
+    session_factory = make_session_factory(engine)
+    return session_factory()
+
+
+async def _insert_account(session: AsyncSession, *, email: str) -> int:
+    result = await session.execute(
+        insert(Account)
+        .values(email=email, hashed_password="not-a-real-hash")
+        .returning(Account.id)
+    )
+    await session.commit()
+    return result.scalar_one()
+
+
+def _unique_email() -> str:
+    return f"{uuid.uuid4()}@example.com"
+
+
+def test_real_insert_account_and_garage_round_trip() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            email = _unique_email()
+            account_id = await _insert_account(session, email=email)
+
+            await session.execute(insert(garages).values(account_id=account_id))
+            await session.commit()
+
+            account = (
+                await session.execute(select(Account).where(Account.id == account_id))
+            ).scalar_one()
+            assert account.email == email
+
+            garage_row = (
+                await session.execute(
+                    select(garages).where(garages.c.account_id == account_id)
+                )
+            ).one()
+            assert garage_row.account_id == account_id
+
+    run(body())
+
+
+def test_real_duplicate_email_violates_unique_constraint() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            email = _unique_email()
+            await _insert_account(session, email=email)
+
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    insert(Account).values(email=email, hashed_password="another-hash")
+                )
+                await session.commit()
+
+    run(body())
+
+
+def test_real_duplicate_garage_for_same_account_violates_unique_constraint() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            account_id = await _insert_account(session, email=_unique_email())
+            await session.execute(insert(garages).values(account_id=account_id))
+            await session.commit()
+
+            with pytest.raises(IntegrityError):
+                await session.execute(insert(garages).values(account_id=account_id))
+                await session.commit()
+
+    run(body())
+
+
+def test_real_deleting_account_cascades_to_garage() -> None:
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            account_id = await _insert_account(session, email=_unique_email())
+            await session.execute(insert(garages).values(account_id=account_id))
+            await session.commit()
+
+            await session.execute(delete(Account).where(Account.id == account_id))
+            await session.commit()
+
+            remaining = (
+                await session.execute(
+                    select(garages).where(garages.c.account_id == account_id)
+                )
+            ).all()
+            assert remaining == []
+
+    run(body())
