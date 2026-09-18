@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push*)",
+            "command": "UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo origin/main); MERGE_BASE=$(git merge-base HEAD \"$UPSTREAM\" 2>/dev/null); if [ -z \"$MERGE_BASE\" ]; then exit 0; fi; MATCHED=$(git diff --name-only \"$MERGE_BASE\" HEAD | grep -E '^apps/backend/.*(auth|session|password)|(^|/)field_acquisition\\.py$|^pyproject\\.toml$|^uv\\.lock$|package\\.json$|package-lock\\.json$|^\\.env' || true); if [ -n \"$MATCHED\" ]; then FILES=$(echo \"$MATCHED\" | tr '\\n' ',' | sed 's/,/, /g; s/, $//'); printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"This push touches security/secrets/dependency-sensitive files: %s. Run the security-audit skill in guidance mode against these files first (see TESTING.md Security-audit gate section) before confirming this push.\"}}\\n' \"$FILES\"; fi",
+            "timeout": 15,
+            "statusMessage": "Checking diff for security-sensitive changes before push..."
+          }
+        ]
+      }
+    ]
+  }
+}

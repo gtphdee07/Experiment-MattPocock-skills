@@ -8,6 +8,10 @@ Issues live in this repo's GitHub Issues, using the `gh` CLI. See `docs/agents/i
 
 Single-context layout (one `CONTEXT.md` + `docs/adr/` at the repo root). See `docs/agents/domain.md`.
 
+### Testing
+
+Five test categories, regression scoping (run only the tests a change could break), and a pre-push security-audit gate. See `TESTING.md`.
+
 ## Working rules
 
 ### Verify before touching anything outside this repo, or before a multi-target delete
