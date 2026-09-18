@@ -131,11 +131,11 @@ that member's own tests plus every member that transitively depends on it:
 
 | Changed member | Also run (dependents) |
 |---|---|
-| `packages/towing-core` | `packages/towing-app`, `apps/cli`, `apps/streamlit` (+ `apps/backend`, once it exists) |
+| `packages/towing-core` | `packages/towing-app`, `apps/cli`, `apps/streamlit`, `apps/backend` |
 | `packages/towing-app` | `apps/cli` |
 | `apps/cli` | — |
 | `apps/streamlit` | — |
-| `apps/backend` (future) | — |
+| `apps/backend` | — |
 
 A change to root-level shared config (`pyproject.toml`, `uv.lock`) touches
 every member's build — run everything.

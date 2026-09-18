@@ -10,6 +10,7 @@ testpaths = [
     "packages/towing-app/tests",
     "apps/cli/tests",
     "apps/streamlit/tests",
+    "apps/backend/tests",
 ]
 
 [tool.mypy]
@@ -29,11 +30,18 @@ extend-exclude = ["docs/design"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["towing_core", "towing_app", "towing_cli", "towing_streamlit"]
+known-first-party = ["towing_core", "towing_app", "towing_cli", "towing_streamlit", "towing_backend"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is exactly `Depends(...)` as an
+# argument default (apps/backend); B008 exists to catch a real footgun in
+# general Python, but flags this pattern as a false positive.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "mypy>=1.10",
     "ruff>=0.16.6",
+    "httpx>=0.27",
 ]
