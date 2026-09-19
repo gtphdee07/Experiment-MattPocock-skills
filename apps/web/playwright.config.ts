@@ -52,13 +52,11 @@ export default defineConfig({
     },
     {
       // The real apps/backend (issues #18-#21), pointed at a fresh ephemeral
-      // SQLite DB. Launched via e2e/run_backend.py rather than the more
-      // obvious `uvicorn towing_backend.app:create_app --factory ...`
-      // - see that script's docstring for why (a real, pre-existing nested-
-      // event-loop bug in towing_backend.migrate under this uvicorn
-      // version's --factory loading, worked around without touching
-      // apps/backend itself).
-      command: 'uv run python ../web/e2e/run_backend.py',
+      // SQLite DB. Launched via towing_backend.asgi:app (issue #35's fix),
+      // never `towing_backend.app:create_app --factory ...` - that form
+      // crashes on startup under this uvicorn version (a nested-event-loop
+      // conflict between uvicorn's own loop and Alembic's migration path).
+      command: 'uv run uvicorn towing_backend.asgi:app --host 127.0.0.1 --port 8000',
       cwd: backendDir,
       env: {
         TOWING_BACKEND_DB_URL: backendDbUrl,
