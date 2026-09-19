@@ -30,8 +30,13 @@ from fastapi_users.authentication import AuthenticationBackend, CookieTransport
 from fastapi_users.authentication.strategy import DatabaseStrategy
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyAccessTokenDatabase
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from towing_backend.calculator import build_calculator_router
 from towing_backend.db import make_engine, make_session_factory
 from towing_backend.migrate import run_migrations
 from towing_backend.models import Account, AccountSession
@@ -113,6 +118,20 @@ def create_app(
 
     app = FastAPI(title="Towing Limit Checker Backend")
 
+    # Issue #38: `/api/evaluate` is the one unauthenticated route (the free
+    # calculator has to stay anonymous, ADR 0013), so it gets a per-IP rate
+    # limit instead of the session-auth gate every other route relies on.
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    # slowapi's own handler is typed against a plain `Exception`, narrower
+    # than Starlette's `add_exception_handler` signature expects - a stub
+    # gap in the library itself, not a real type error here.
+    app.add_exception_handler(
+        RateLimitExceeded,
+        _rate_limit_exceeded_handler,  # type: ignore[arg-type]
+    )
+    app.add_middleware(SlowAPIMiddleware)
+
     # Narrowed to the deployed frontend origin via env-driven settings
     # (issue #18 Story 17) - never "*", unlike the stateless reference
     # implementation this extends, since credentialed (cookie-bearing)
@@ -188,6 +207,11 @@ def create_app(
         ),
         tags=["weigh-events"],
     )
+
+    # Issue #38: the free calculator's own endpoint - unauthenticated by
+    # design, registered last since it needs no dependency on any of the
+    # Account-scoped machinery above.
+    app.include_router(build_calculator_router(limiter), tags=["calculator"])
 
     @app.get("/api/health", tags=["health"])
     def health() -> dict[str, bool]:

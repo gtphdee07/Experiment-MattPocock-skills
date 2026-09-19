@@ -30,6 +30,11 @@ dependencies = [
     # Postgres needs its own sync-capable driver for that second engine;
     # SQLite's sync dialect needs no separate driver (stdlib `sqlite3`).
     "psycopg2-binary>=2.9",
+    # Issue #38: /api/evaluate is the one fully unauthenticated route (the
+    # free calculator has to stay anonymous per ADR 0013), so it needs its
+    # own abuse mitigation - every other route relies on session auth for
+    # that instead.
+    "slowapi>=0.1.9",
 ]
 
 [build-system]
