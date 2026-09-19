@@ -20,7 +20,13 @@ export default function ResultBox({ check }: { check: CheckOut }) {
       {check.actual != null && check.rating != null && (
         <div style={{ fontSize: '0.72rem', opacity: 0.95, lineHeight: 1.35 }}>{Math.round(check.actual)} lb vs {Math.round(check.rating)} lb</div>
       )}
-      {check.status === 'not_evaluated' && check.note && (
+      {/* Rendered whenever the backend sends a note - not just for
+          `not_evaluated` - so an Unverified Value label (issue #30 Story 26:
+          an adjusted Reused Solo Weight or GCWR) is visible on a check that
+          still Passes/Fails/Near-Limits. The free calculator's own results
+          never carry a note outside `not_evaluated`, so this is additive,
+          not a behavior change for it (issue #30 Implementation Decisions). */}
+      {check.note && (
         <div style={{ fontSize: '0.68rem', opacity: 0.92, lineHeight: 1.3 }}>{check.note}</div>
       )}
     </div>

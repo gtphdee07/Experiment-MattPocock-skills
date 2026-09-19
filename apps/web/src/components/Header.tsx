@@ -1,8 +1,20 @@
+import type { ReactNode } from 'react';
 import type { Theme, Mode } from '../theme';
 
-interface Props { theme: Theme; mode: Mode; onToggleTheme: () => void; }
+interface Props {
+  theme: Theme;
+  mode: Mode;
+  onToggleTheme: () => void;
+  /** Optional real nav links for the authenticated shell. When omitted, the
+   * original placeholder Home/About anchors render unchanged - the free
+   * calculator (issue #30 Story 1/32) never passes this. */
+  navLinks?: ReactNode;
+  /** Optional signed-in-state slot (email + logout) for the authenticated
+   * shell. Omitted entirely for the calculator. */
+  authControls?: ReactNode;
+}
 
-export default function Header({ theme, mode, onToggleTheme }: Props) {
+export default function Header({ theme, mode, onToggleTheme, navLinks, authControls }: Props) {
   return (
     <header style={{ maxWidth: 1100, margin: '0 auto', padding: '22px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -10,8 +22,13 @@ export default function Header({ theme, mode, onToggleTheme }: Props) {
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.15rem', color: theme.text }}>Towing Limit Checker</div>
       </div>
       <nav style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-        <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>Home</a>
-        <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>About</a>
+        {navLinks ?? (
+          <>
+            <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>Home</a>
+            <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>About</a>
+          </>
+        )}
+        {authControls}
         <button
           onClick={onToggleTheme}
           aria-label="Toggle dark mode"

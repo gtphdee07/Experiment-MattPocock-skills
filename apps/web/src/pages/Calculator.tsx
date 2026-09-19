@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import Header from './components/Header';
-import Footer from './components/Footer';
-import ResultBox from './components/ResultBox';
-import { LIGHT, DARK, ORANGE, GREEN, BANNER, BANNER_MESSAGE } from './theme';
-import type { Mode } from './theme';
-import type { TruckForm, TrailerForm, CombinedForm, SoloForm, EvaluateResponse } from './types';
-import { evaluate } from './api';
+import Header from '../components/Header';
+import Footer from '../components/Footer';
+import ResultBox from '../components/ResultBox';
+import { LIGHT, DARK, ORANGE, GREEN, BANNER, BANNER_MESSAGE } from '../theme';
+import type { Mode } from '../theme';
+import type { TruckForm, TrailerForm, CombinedForm, SoloForm, EvaluateResponse } from '../types';
+import { evaluate } from '../api';
 
 const inputStyle = (theme: typeof LIGHT): CSSProperties => ({
   height: 50, padding: '0 14px', borderRadius: 12, border: `1.5px solid ${theme.border}`,
@@ -14,7 +14,7 @@ const inputStyle = (theme: typeof LIGHT): CSSProperties => ({
 });
 const labelStyle = (theme: typeof LIGHT): CSSProperties => ({ fontWeight: 600, fontSize: '0.85rem', color: theme.text2 });
 
-export default function App() {
+export default function Calculator() {
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState<Mode>('light');
   const theme = mode === 'dark' ? DARK : LIGHT;

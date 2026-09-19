@@ -225,3 +225,11 @@ __marimo__/
 
 # Raw design-deliverable bundles - contents are extracted into docs/design/*; safe to delete locally
 docs/design/_original-deliverables/
+
+# Node / apps/web (issue #30 - npm-managed, not part of the uv workspace)
+node_modules/
+dist/
+.vite/
+playwright-report/
+test-results/
+apps/web/.env.e2e
