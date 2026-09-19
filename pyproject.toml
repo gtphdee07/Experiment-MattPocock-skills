@@ -1,5 +1,9 @@
 [tool.uv.workspace]
 members = ["packages/*", "apps/*"]
+# apps/web (issue #30) is an npm-managed TypeScript/React app, not a uv/Python
+# workspace member - it has no pyproject.toml on purpose. Excluded explicitly
+# so `uv sync`/`uv run` don't try to treat it as a (missing) Python package.
+exclude = ["apps/web"]
 
 [tool.uv.sources]
 towing-core = { workspace = true }
@@ -19,12 +23,13 @@ strict = true
 # docs/design/ holds Claude Design reference deliverables (a FastAPI + React
 # bundle, a Streamlit main() patch snippet) - illustrative code, not part of
 # any package, and it imports libraries the workspace doesn't install.
-exclude = ['^docs/design/']
+# apps/web (issue #30) is the promoted TypeScript/React app - not Python.
+exclude = ['^docs/design/', '^apps/web/']
 
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-extend-exclude = ["docs/design"]
+extend-exclude = ["docs/design", "apps/web"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
