@@ -18,6 +18,45 @@ from towing_backend.migrate import run_migrations
 from towing_backend.settings import DEFAULT_SECRET, load_settings
 
 
+def test_cookie_secure_defaults_to_false() -> None:
+    # Safe default for local dev (plain HTTP) - a real deploy must opt in
+    # explicitly (see #39: this being False in a cross-site deployment,
+    # paired with fastapi-users' default SameSite=Lax, silently breaks
+    # sign-in - the session cookie never gets sent back on a cross-origin
+    # fetch, since SameSite=Lax only allows top-level navigation).
+    settings = load_settings(env={})
+
+    assert settings.cookie_secure is False
+
+
+def test_cookie_secure_env_var_round_trips() -> None:
+    settings = load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": "true"})
+
+    assert settings.cookie_secure is True
+
+
+def test_cookie_secure_env_var_is_case_insensitive_and_rejects_junk() -> None:
+    assert (
+        load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": "True"}).cookie_secure
+        is True
+    )
+    assert (
+        load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": "TRUE"}).cookie_secure
+        is True
+    )
+    assert (
+        load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": "false"}).cookie_secure
+        is False
+    )
+    assert (
+        load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": ""}).cookie_secure is False
+    )
+    assert (
+        load_settings(env={"TOWING_BACKEND_COOKIE_SECURE": "yes"}).cookie_secure
+        is False
+    )
+
+
 def test_fallback_secret_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="towing_backend.settings"):
         settings = load_settings(env={})

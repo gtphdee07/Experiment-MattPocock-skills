@@ -20,11 +20,12 @@ from towing_backend.app import create_app
 from towing_backend.settings import Settings
 
 
-def make_settings(db_path: Path) -> Settings:
+def make_settings(db_path: Path, *, cookie_secure: bool = False) -> Settings:
     return Settings(
         database_url=f"sqlite+aiosqlite:///{db_path}",
         cors_origin="http://localhost:5173",
         secret="test-secret",
+        cookie_secure=cookie_secure,
     )
 
 

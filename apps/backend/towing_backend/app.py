@@ -93,10 +93,18 @@ def create_app(
     cookie_transport = CookieTransport(
         cookie_name=COOKIE_NAME,
         cookie_max_age=SESSION_LIFETIME_SECONDS,
-        # Local dev/test runs over plain HTTP; tighten to True once this is
-        # actually served over HTTPS (deploy-time config, not a spec
-        # decision - see ADR 0011's "specific PaaS host" consequence).
-        cookie_secure=False,
+        cookie_secure=settings.cookie_secure,
+        # #39: fastapi-users defaults SameSite to "lax", which browsers
+        # refuse to send on a cross-site fetch() - only on a top-level
+        # navigation. apps/web and apps/backend deploy to different
+        # registrable domains (ADR 0016: Cloudflare Pages + Render, not
+        # subdomains of a shared parent), a genuinely cross-site
+        # relationship, so every authenticated call after login silently
+        # lost its cookie until this was set explicitly. "none" requires
+        # Secure to be accepted at all (browsers reject SameSite=None
+        # without Secure outright), which is exactly why this is derived
+        # from cookie_secure rather than being its own independent setting.
+        cookie_samesite="none" if settings.cookie_secure else "lax",
     )
 
     def get_database_strategy(

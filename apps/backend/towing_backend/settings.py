@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 DB_URL_ENV_VAR = "TOWING_BACKEND_DB_URL"
 CORS_ORIGIN_ENV_VAR = "TOWING_BACKEND_CORS_ORIGIN"
 SECRET_ENV_VAR = "TOWING_BACKEND_SECRET"
+COOKIE_SECURE_ENV_VAR = "TOWING_BACKEND_COOKIE_SECURE"
 
 # Development-only default DB path. `.dev-data/` is gitignored (see root
 # CLAUDE.md: "Keep development activity off the app's real default data
@@ -39,6 +40,14 @@ class Settings:
     database_url: str
     cors_origin: str
     secret: str
+    # #39: coupled to the session cookie's SameSite attribute in app.py, not
+    # an independent flag - a cross-site deploy (frontend and backend on
+    # different registrable domains, the actual shape ADR 0016 produces)
+    # needs SameSite=None, which every modern browser rejects outright
+    # unless Secure is also set. False (SameSite=Lax) is the right default
+    # for local HTTP dev, where there's no cross-site relationship to begin
+    # with.
+    cookie_secure: bool = False
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -46,6 +55,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     database_url = env.get(DB_URL_ENV_VAR) or f"sqlite+aiosqlite:///{DEFAULT_DB_PATH}"
     cors_origin = env.get(CORS_ORIGIN_ENV_VAR) or DEFAULT_CORS_ORIGIN
     secret = env.get(SECRET_ENV_VAR) or DEFAULT_SECRET
+    cookie_secure = (env.get(COOKIE_SECURE_ENV_VAR) or "").strip().lower() == "true"
     if secret == DEFAULT_SECRET:
         # #33: a silent fallback here means every reset-password/
         # verification token gets signed with a value that's public (it's
@@ -57,4 +67,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             "secret.",
             SECRET_ENV_VAR,
         )
-    return Settings(database_url=database_url, cors_origin=cors_origin, secret=secret)
+    return Settings(
+        database_url=database_url,
+        cors_origin=cors_origin,
+        secret=secret,
+        cookie_secure=cookie_secure,
+    )
