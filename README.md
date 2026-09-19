@@ -93,10 +93,26 @@ The 6 `test_real_*` tests need `ANTHROPIC_API_KEY` and API credit; skip them wit
 Also run in CI-style: `uv run mypy .`, `uv run ruff check .`,
 `uv run ruff format --check .`.
 
+## Deploying
+
+`apps/backend` (FastAPI + Postgres) deploys to Render; `apps/web` (the full
+account/garage/history web app) deploys to Cloudflare Pages. See
+[`docs/adr/0016-deployment-hosting-and-email-provider.md`](docs/adr/0016-deployment-hosting-and-email-provider.md)
+for why. For a first-time setup (accounts, environment variables, wiring the
+two together), run the guided wizard instead of doing it by hand:
+
+```bash
+./scripts/deploy-render-cloudflare.sh
+```
+
+It opens the right dashboard pages, tells you exactly what to click/paste,
+and remembers where you left off if you stop partway through.
+
 ## Status
 
 - **Compute core + services + CLI + Streamlit calculator** — done.
-- **FastAPI backend + full web app** (accounts, garage, history) — planned.
+- **FastAPI backend + full web app** (accounts, garage, history) — built;
+  first real deploy in progress (see Deploying, above).
 - **Android app** — planned.
 
 ## Disclaimer
