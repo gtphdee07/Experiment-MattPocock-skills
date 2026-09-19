@@ -5,13 +5,16 @@ interface Props {
   theme: Theme;
   mode: Mode;
   onToggleTheme: () => void;
-  /** Optional real nav links for the authenticated shell. When omitted, the
-   * original placeholder Home/About anchors render unchanged - the free
-   * calculator (issue #30 Story 1/32) never passes this. */
-  navLinks?: ReactNode;
-  /** Optional signed-in-state slot (email + logout) for the authenticated
-   * shell. Omitted entirely for the calculator. */
-  authControls?: ReactNode;
+  /** Page-specific nav links (e.g. Garage/History when signed in) - `null`
+   * renders nothing extra, never a placeholder. Every caller supplies this
+   * explicitly (issue #38-adjacent fix: a prior version silently fell back
+   * to dead `href="#"` anchors when omitted, which is exactly how the free
+   * calculator ended up with no path to /login or /register at all). */
+  navLinks: ReactNode;
+  /** The signed-in-state slot (Log in/Register, or email + Log out) - see
+   * `AuthControls`. Every page passes this; there is no page where a
+   * visitor shouldn't be able to reach it. */
+  authControls: ReactNode;
 }
 
 export default function Header({ theme, mode, onToggleTheme, navLinks, authControls }: Props) {
@@ -22,12 +25,7 @@ export default function Header({ theme, mode, onToggleTheme, navLinks, authContr
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.15rem', color: theme.text }}>Towing Limit Checker</div>
       </div>
       <nav style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-        {navLinks ?? (
-          <>
-            <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>Home</a>
-            <a href="#" style={{ color: theme.text, fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' }}>About</a>
-          </>
-        )}
+        {navLinks}
         {authControls}
         <button
           onClick={onToggleTheme}

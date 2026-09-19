@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import ResultBox from '../components/ResultBox';
+import AuthControls from '../components/AuthControls';
+import { useAuth } from '../auth/AuthContext';
 import { LIGHT, DARK, ORANGE, GREEN, BANNER, BANNER_MESSAGE } from '../theme';
 import type { Mode } from '../theme';
 import type { TruckForm, TrailerForm, CombinedForm, SoloForm, EvaluateResponse } from '../types';
 import { evaluate } from '../api';
+
+const navLinkStyle: CSSProperties = { color: 'inherit', fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' };
 
 const inputStyle = (theme: typeof LIGHT): CSSProperties => ({
   height: 50, padding: '0 14px', borderRadius: 12, border: `1.5px solid ${theme.border}`,
@@ -18,6 +23,7 @@ export default function Calculator() {
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState<Mode>('light');
   const theme = mode === 'dark' ? DARK : LIGHT;
+  const { account } = useAuth();
 
   const [truck, setTruck] = useState<TruckForm>({ gvwr: '', frontGawr: '', rearGawr: '', gcwr: '' });
   const [trailer, setTrailer] = useState<TrailerForm>({ gvwr: '', gawr: '', axleCount: '2', uvw: '' });
@@ -70,7 +76,20 @@ export default function Calculator() {
 
   return (
     <div style={{ minHeight: '100vh', background: theme.page, color: theme.text, fontFamily: 'var(--font-body)', transition: 'background .15s' }}>
-      <Header theme={theme} mode={mode} onToggleTheme={() => setMode(m => (m === 'light' ? 'dark' : 'light'))} />
+      <Header
+        theme={theme}
+        mode={mode}
+        onToggleTheme={() => setMode(m => (m === 'light' ? 'dark' : 'light'))}
+        navLinks={
+          account ? (
+            <>
+              <Link to="/garage" style={navLinkStyle}>Garage</Link>
+              <Link to="/weigh-events" style={navLinkStyle}>History</Link>
+            </>
+          ) : null
+        }
+        authControls={<AuthControls />}
+      />
 
       {step === 0 && (
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '8px 32px 44px', textAlign: 'center' }}>

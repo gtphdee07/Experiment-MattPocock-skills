@@ -41,6 +41,23 @@ async function addTrailer(page: Page, nickname: string): Promise<void> {
 }
 
 test.describe('authenticated journey', () => {
+  test('reaches login and register by clicking from the calculator, not by URL', async ({ page }) => {
+    // Every other test in this file navigates via page.goto('/login' or
+    // '/register') directly, which is exactly how a real, discoverable-nav
+    // bug shipped undetected: the calculator (the only page a fully
+    // anonymous visitor lands on) had no link to either page at all. This
+    // is the one test that actually clicks through from '/', the real
+    // entry point.
+    await page.goto('/');
+    await page.getByRole('navigation').getByRole('link', { name: 'Log in' }).click();
+    await expect(page).toHaveURL(/\/login$/);
+
+    // /login's own body also links to /register ("Need an account?"), so
+    // scope to the nav specifically to stay unambiguous.
+    await page.getByRole('navigation').getByRole('link', { name: 'Register' }).click();
+    await expect(page).toHaveURL(/\/register$/);
+  });
+
   test('register, build a Garage, and see the account is signed in (Story 2/6/9/10/14)', async ({ page }) => {
     const email = uniqueEmail('garage');
     await registerAndLogin(page, email);
