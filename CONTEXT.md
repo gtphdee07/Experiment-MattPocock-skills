@@ -91,6 +91,26 @@ A non-blocking, advisory warning shown when a linked Combined+Solo Ticket pair's
 A number entered manually with no photo or CAT Scale Ticket backing it — most commonly GCWR, or a Reused Solo Weight the user has adjusted. Any check depending on one is labeled distinctly in output from checks backed by an OCR'd tag or Ticket.
 _Avoid_: manual value, self-reported value.
 
+**Website Access**:
+The one-time purchase that unlocks persistence for an Account — saving Garage profiles and Weigh Event history. Without it, the calculator itself is fully usable, anonymously, with no Account at all (see ADR 0013).
+_Avoid_: subscription, paywall tier.
+
+**Android Access**:
+The one-time purchase that includes Website Access plus unlocks the Android client. A superset, not an add-on layered on top of a separate prior purchase — buying it after already owning Website Access carries no discount (see ADR 0013).
+_Avoid_: premium tier, pro tier.
+
+**OCR Credit**:
+The unit an Account spends to have one image processed by one of the three image-based Claude-vision field sources (Truck Tag, Trailer Tag, Scale Ticket) — one photo, one credit; a full Weigh Event's worth of photos costs several. Does not cover the Axle-Count Lookup, which is metered separately since it isn't image-based (see ADR 0014). Requires the Account already hold Website Access or Android Access; a zero balance falls back to manual entry rather than blocking the flow. Purchased in 6-credit bundles, never expires, but is capped at a configurable outstanding-balance ceiling to bound Anthropic API cost exposure (see ADR 0013).
+_Avoid_: scan, token, quota.
+
+**Axle-Count Lookup**:
+The web-search-backed Claude call that proposes a Trailer Profile's Axle Count from its make/model, made once per Trailer Profile creation. Unlike the three image-based Claude-vision sources it costs no OCR Credit — it's free to use, but capped by a per-Account lifetime counter (ceiling to be set later); once an Account exhausts it, the lookup is skipped entirely (never calls Claude again for that Account) and Axle Count falls back to manual entry (see ADR 0014).
+_Avoid_: axle lookup credit, OCR scan (it isn't one — no image involved).
+
+**Purchase Ledger**:
+The durable record of every Website Access, Android Access, and OCR Credit bundle purchase an Account makes — one row per Stripe transaction, kept for receipts and support lookups even though no discount logic reads it back (see ADR 0013).
+_Avoid_: billing history, transaction log.
+
 ## Code layout
 
 The code is one `uv` workspace with two library tiers and its client apps. `towing-core` (`packages/towing-core`) is the compute tier — domain models, the overload calculations, Rig Evaluation, and the storage / field-acquisition ports with in-memory implementations; it depends on nothing outside the standard library. `towing-app` (`packages/towing-app`) is the application-services tier — Weigh Event orchestration, persistence coordination, and the concrete SQLite and Claude-vision adapters. The workspace members are `packages/towing-core`, `packages/towing-app`, `apps/cli` (the interactive client), and the future `apps/streamlit` calculator (compute tier only). ADR 0008 records the tier split and the workspace; ADR 0009 records why the interactive review/confirm/retry flows stay in the frontends rather than the shared tiers. The pre-existing CLI-flow test suite (`apps/cli/tests/`) is the behavior-invariance safety net for that extraction.
