@@ -11,9 +11,11 @@ verified at the compute layer, not re-derived here.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
-VALID_PAYLOAD = {
+VALID_PAYLOAD: dict[str, Any] = {
     "truck": {"gvwr": 14000, "front_gawr": 6000, "rear_gawr": 9900, "gcwr": 32500},
     "trailer": {"gvwr": 23500, "gawr": 8000, "axle_count": 3, "uvw": 20554},
     "combined": {"steer": 5000, "drive": 10000, "trailer_axle": 19000, "gross": 33000},
@@ -64,6 +66,17 @@ def test_evaluate_rejects_malformed_payload(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_evaluate_rejects_non_positive_ratings(client: TestClient) -> None:
+    # Matches towing_backend.schemas.TruckIn/TrailerIn's own `gt=0`
+    # convention - this route has no session-auth layer behind it the way
+    # every other one does, so boundary validation carries more weight here.
+    payload = {**VALID_PAYLOAD, "truck": {**VALID_PAYLOAD["truck"], "gvwr": 0}}
+
+    response = client.post("/api/evaluate", json=payload)
+
+    assert response.status_code == 422
+
+
 def test_evaluate_is_rate_limited_past_its_threshold(client: TestClient) -> None:
     # The route's own limit is 30/minute (see towing_backend.calculator) -
     # drive past it and confirm the 31st request in the same window is
@@ -74,3 +87,33 @@ def test_evaluate_is_rate_limited_past_its_threshold(client: TestClient) -> None
 
     assert statuses[:30] == [200] * 30
     assert statuses[30] == 429
+
+
+def test_evaluate_rate_limit_is_keyed_by_forwarded_for_not_shared_globally(
+    client: TestClient,
+) -> None:
+    # Issue #38 fix: apps/backend deploys behind Render's reverse proxy
+    # (ADR 0016), which terminates TLS and forwards every request over
+    # HTTP - `request.client.host` is Render's own proxy address for every
+    # visitor there, not the real caller's IP. Keying the limiter on that
+    # would collapse the per-IP limit into one shared bucket for the whole
+    # site. This drives one simulated visitor past the limit, then confirms
+    # a *different* X-Forwarded-For value still gets served - proving the
+    # limiter is actually keyed per-client, not globally.
+    for _ in range(30):
+        response = client.post(
+            "/api/evaluate",
+            json=VALID_PAYLOAD,
+            headers={"X-Forwarded-For": "203.0.113.1"},
+        )
+        assert response.status_code == 200
+
+    exhausted = client.post(
+        "/api/evaluate", json=VALID_PAYLOAD, headers={"X-Forwarded-For": "203.0.113.1"}
+    )
+    assert exhausted.status_code == 429
+
+    other_visitor = client.post(
+        "/api/evaluate", json=VALID_PAYLOAD, headers={"X-Forwarded-For": "203.0.113.2"}
+    )
+    assert other_visitor.status_code == 200

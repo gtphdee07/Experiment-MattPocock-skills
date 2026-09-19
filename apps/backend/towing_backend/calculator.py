@@ -21,7 +21,7 @@ spend), so the risk here is availability, not billing.
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 
 from towing_core.evaluation import evaluate_weigh_event
@@ -34,31 +34,68 @@ from towing_core.report import LEGAL_DISCLAIMER
 RATE_LIMIT = "30/minute"
 
 
+def rate_limit_key(request: Request) -> str:
+    """The per-client key this route's rate limit is bucketed on.
+
+    Not `slowapi.util.get_remote_address` (`request.client.host`): ADR 0016
+    puts this behind Render's reverse proxy, which terminates TLS and
+    forwards every request over HTTP - the service "is not directly
+    reachable via the public internet" per Render's own docs - so
+    `request.client.host` would be Render's proxy address for every
+    visitor, collapsing the per-IP limit into one shared bucket for the
+    whole site.
+
+    Also not `slowapi.util.get_ipaddr`, despite its docstring claiming
+    exactly this job: it checks a literal `"X_FORWARDED_FOR"` (underscore)
+    header name, which no real HTTP client or proxy ever sends - header
+    field names are hyphenated on the wire (`X-Forwarded-For`) - so it
+    silently never matches and always falls through to
+    `request.client.host` anyway. Confirmed directly against the installed
+    library (0.1.10), not assumed - a real bug in slowapi itself, not a
+    deployment detail. Takes the first entry of a comma-separated
+    `X-Forwarded-For` (the original client, standard convention), falling
+    back to `request.client.host` for local dev/tests, where no proxy sits
+    in front and there's no header to read.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
+
+
+# `gt=0` constraints match this codebase's established boundary-validation
+# convention (`towing_backend.schemas.TruckIn`/`TrailerIn`,
+# `towing_backend.weigh_events_routes.CombinedTicketIn`) - the reference
+# implementation this was ported from had none, but this route has no
+# second layer (session auth) behind it the way every other one does, so
+# fail-fast validation matters more here, not less.
 class TruckIn(BaseModel):
-    gvwr: float
-    front_gawr: float
-    rear_gawr: float
-    gcwr: float | None = None
+    gvwr: float = Field(gt=0)
+    front_gawr: float = Field(gt=0)
+    rear_gawr: float = Field(gt=0)
+    gcwr: float | None = Field(default=None, gt=0)
 
 
 class TrailerIn(BaseModel):
-    gvwr: float
-    gawr: float
-    axle_count: int
-    uvw: float | None = None
+    gvwr: float = Field(gt=0)
+    gawr: float = Field(gt=0)
+    axle_count: int = Field(gt=0)
+    uvw: float | None = Field(default=None, gt=0)
 
 
 class CombinedIn(BaseModel):
-    steer: float
-    drive: float
-    trailer_axle: float
-    gross: float
+    steer: float = Field(gt=0)
+    drive: float = Field(gt=0)
+    trailer_axle: float = Field(gt=0)
+    gross: float = Field(gt=0)
 
 
 class SoloIn(BaseModel):
-    steer: float
-    drive: float
-    gross: float
+    steer: float = Field(gt=0)
+    drive: float = Field(gt=0)
+    gross: float = Field(gt=0)
 
 
 class EvaluateRequest(BaseModel):
