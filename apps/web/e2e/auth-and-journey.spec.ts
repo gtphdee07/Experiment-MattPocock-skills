@@ -281,6 +281,54 @@ test.describe('authenticated journey', () => {
     await expect(page.getByRole('button', { name: 'Older' })).toBeDisabled();
   });
 
+  test('loads a saved Garage profile on the calculator, edits a field, and still submits anonymously (issue #44)', async ({ page }) => {
+    const email = uniqueEmail('calc-garage');
+    await registerAndLogin(page, email);
+    await addTruck(page, 'Addie Calc');
+    await addTrailer(page, 'Goose Calc');
+
+    // The free calculator lives at '/' - fully anonymous and untouched
+    // (Story 1/6/7), but now shows an optional Garage picker for a
+    // logged-in user with a non-empty Garage (Story 1/2/5).
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Know before you tow.' })).toBeVisible();
+
+    // Step 0: pick the saved Truck Profile - fields populate without typing.
+    await page.getByLabel('Load from Garage — optional').selectOption({ label: 'Addie Calc' });
+    await expect(page.getByLabel('GVWR (lb)')).toHaveValue('10000');
+    await expect(page.getByLabel('Front GAWR (lb)')).toHaveValue('4500');
+    await expect(page.getByLabel('Rear GAWR (lb)')).toHaveValue('6500');
+    await expect(page.getByLabel('GCWR (lb) — optional')).toHaveValue('20000');
+
+    // Story 3: a pre-filled field stays fully editable, exactly like manual entry.
+    await page.getByLabel('GVWR (lb)').fill('11000');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Step 1: pick the saved Trailer Profile.
+    await page.getByLabel('Load from Garage — optional').selectOption({ label: 'Goose Calc' });
+    await expect(page.getByLabel('GVWR (lb)')).toHaveValue('9500');
+    await expect(page.getByLabel('GAWR per axle (lb)')).toHaveValue('5200');
+    await expect(page.getByLabel('Axle Count')).toHaveValue('2');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Step 2: Combined Ticket - manual entry, entirely unaffected by the picker.
+    await page.getByPlaceholder('e.g. 4300').fill('4300');
+    await page.getByPlaceholder('e.g. 6100').fill('6100');
+    await page.getByPlaceholder('e.g. 9200').fill('9200');
+    await page.getByPlaceholder('e.g. 19600').fill('19600');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Step 3: Solo Ticket - skip it, submit.
+    await page.getByRole('button', { name: 'See results' }).click();
+
+    // Step 4: results - Story 7's requirement that the evaluate submission
+    // remains exactly as unauthenticated/unsaved as it's always been still
+    // holds; this is the same reference-backend '/api/evaluate' call the
+    // fully anonymous calculator.spec.ts flow exercises.
+    await expect(page.getByRole('heading', { name: 'Rig Evaluation' })).toBeVisible();
+    await expect(page.getByText('Steer Axle', { exact: true })).toBeVisible();
+  });
+
   test('logs out and confirms a protected route redirects to login again (Story 7/8)', async ({ page }) => {
     const email = uniqueEmail('logout');
     await registerAndLogin(page, email);
