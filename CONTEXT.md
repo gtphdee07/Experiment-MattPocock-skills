@@ -57,6 +57,10 @@ A saved collection of Truck Profiles and Trailer Profiles, mixed and matched per
 **Truck Profile** / **Trailer Profile**:
 The saved specs for one Tow Vehicle or Trailer in the Garage: certification-label ratings, plus GCWR (Truck Profile, manual entry) or Axle Count (Trailer Profile, looked up and user-confirmed).
 
+**One-Off Truck** / **One-Off Trailer**:
+A Truck or Trailer entered for a single Weigh Event without being saved to the Garage as a Truck Profile or Trailer Profile — its ratings and Nickname exist only in that Weigh Event's own snapshot (see ADR 0004), never as a persisted Profile row. Chosen instead of a saved Profile when the rig is one-off or borrowed and isn't worth keeping.
+_Avoid_: Temporary Truck Profile, Temporary Trailer Profile (a Profile is by definition saved to the Garage; a One-Off Truck/Trailer never is).
+
 **Nickname**:
 A user-editable display name for a Truck Profile or Trailer Profile — e.g. "Addie", "Goose", or a CDL-style truck number. Set at creation (optional) or during a later edit; when left blank, defaults to a name derived from the Profile's database ID (e.g. "Truck 3"). Not required to be unique. Used everywhere a Profile is shown to the user — the database ID itself is never surfaced as the primary way to refer to a Profile.
 _Avoid_: Reference, Unit Number, Truck Number.

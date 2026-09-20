@@ -16,3 +16,7 @@ The web app's calculator (compute only, no saving) stays fully anonymous and fre
 - The backend needs the Stripe webhook to be the actual account-creation trigger, not the registration endpoint #18 originally specified — #18's spec needs revisiting for paying users (whether a separate no-payment registration path still exists, e.g. re-sending a password-setup email, or is dropped entirely).
 - Every OCR-credit-consuming endpoint needs an atomic conditional decrement (not a separate read-then-write), both to stay race-safe under concurrent requests and to correctly enforce the cap at purchase time.
 - Exact price points, starter-credit counts, and the balance-cap ceiling are deliberately left unset — recorded as pricing decisions to make at implementation or launch time, not architecture blockers.
+
+## Addendum (2026-09-19)
+
+A logged-in user may now see an optional "load from Garage" convenience on the calculator (picking a saved Truck/Trailer Profile to pre-fill rating fields — see issue #41's calculator spec). This doesn't reverse this ADR's core decision: the calculator is still fully usable anonymously with zero persistence and zero Account requirement, and picking a profile never changes what gets submitted (still an unauthenticated call, nothing saved). It's noted here only because a future reader might otherwise wonder why the "fully anonymous" calculator has any authenticated branch at all. Doesn't meet this project's bar for its own ADR (easily reversible, not a real architectural trade-off) — recorded as an addendum instead.
