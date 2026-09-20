@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '../components/Header';
@@ -8,8 +8,16 @@ import AuthControls from '../components/AuthControls';
 import { useAuth } from '../auth/AuthContext';
 import { LIGHT, DARK, ORANGE, GREEN, BANNER, BANNER_MESSAGE } from '../theme';
 import type { Mode } from '../theme';
-import type { TruckForm, TrailerForm, CombinedForm, SoloForm, EvaluateResponse } from '../types';
-import { evaluate } from '../api';
+import type {
+  TruckForm,
+  TrailerForm,
+  CombinedForm,
+  SoloForm,
+  EvaluateResponse,
+  TruckProfile,
+  TrailerProfile,
+} from '../types';
+import { evaluate, listTrucks, listTrailers } from '../api';
 
 const navLinkStyle: CSSProperties = { color: 'inherit', fontSize: '0.92rem', fontWeight: 600, textDecoration: 'none' };
 
@@ -35,6 +43,57 @@ export default function Calculator() {
   const [result, setResult] = useState<EvaluateResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Issue #44: an optional "load from Garage" convenience, only ever visible
+  // to a logged-in user with a non-empty Garage - picking a Profile just
+  // copies its values into the same local `truck`/`trailer` state the
+  // fields above are already bound to, so the fields stay fully editable
+  // afterward exactly as if typed manually. Doesn't touch the anonymous
+  // `evaluate` submission below in any way (ADR 0013's addendum).
+  const [savedTrucks, setSavedTrucks] = useState<TruckProfile[]>([]);
+  const [savedTrailers, setSavedTrailers] = useState<TrailerProfile[]>([]);
+  const [selectedTruckId, setSelectedTruckId] = useState('');
+  const [selectedTrailerId, setSelectedTrailerId] = useState('');
+
+  useEffect(() => {
+    if (!account) return;
+    void (async () => {
+      try {
+        const [truckList, trailerList] = await Promise.all([listTrucks(), listTrailers()]);
+        setSavedTrucks(truckList);
+        setSavedTrailers(trailerList);
+      } catch {
+        // The Garage picker is a pure convenience - if it can't load, the
+        // calculator still works exactly as the anonymous path does.
+      }
+    })();
+  }, [account]);
+
+  function pickTruckProfile(id: string) {
+    setSelectedTruckId(id);
+    if (id === '') return;
+    const profile = savedTrucks.find(t => String(t.id) === id);
+    if (!profile) return;
+    setTruck({
+      gvwr: String(profile.gvwr),
+      frontGawr: String(profile.front_gawr),
+      rearGawr: String(profile.rear_gawr),
+      gcwr: profile.gcwr != null ? String(profile.gcwr) : '',
+    });
+  }
+
+  function pickTrailerProfile(id: string) {
+    setSelectedTrailerId(id);
+    if (id === '') return;
+    const profile = savedTrailers.find(t => String(t.id) === id);
+    if (!profile) return;
+    setTrailer({
+      gvwr: String(profile.gvwr),
+      gawr: String(profile.gawr),
+      axleCount: String(profile.axle_count),
+      uvw: profile.uvw != null ? String(profile.uvw) : '',
+    });
+  }
 
   const num = (v: string) => { const f = parseFloat(v); return v !== '' && isFinite(f) ? f : null; };
 
@@ -70,6 +129,7 @@ export default function Calculator() {
     setTrailer({ gvwr: '', gawr: '', axleCount: '2', uvw: '' });
     setCombined({ steer: '', drive: '', trailerAxle: '', gross: '' });
     setHasSolo(false); setSolo({ steer: '', drive: '', gross: '' }); setTimeGapHours('');
+    setSelectedTruckId(''); setSelectedTrailerId('');
   }
 
   const segColor = (i: number) => (step >= i ? ORANGE : theme.border);
@@ -113,22 +173,38 @@ export default function Calculator() {
             <>
               <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: '1.5rem' }}>Tow Vehicle ratings</h2>
               <p style={{ margin: '8px 0 22px', fontSize: '0.92rem', color: theme.text2, lineHeight: 1.55 }}>From the Tow Vehicle's certification label, plus its GCWR from the owner's manual (never printed on a tag).</p>
+              {account && savedTrucks.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+                  <label htmlFor="truck-profile-picker" style={labelStyle(theme)}>Load from Garage — optional</label>
+                  <select
+                    id="truck-profile-picker"
+                    value={selectedTruckId}
+                    onChange={e => pickTruckProfile(e.target.value)}
+                    style={inputStyle(theme)}
+                  >
+                    <option value="">Select a saved Truck…</option>
+                    {savedTrucks.map(t => (
+                      <option key={t.id} value={t.id}>{t.nickname}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <label style={labelStyle(theme)}>GVWR (lb)</label>
-                  <input type="number" inputMode="decimal" placeholder="e.g. 10000" value={truck.gvwr} onChange={e => setTruck({ ...truck, gvwr: e.target.value })} style={inputStyle(theme)} />
+                  <label htmlFor="truck-gvwr" style={labelStyle(theme)}>GVWR (lb)</label>
+                  <input id="truck-gvwr" type="number" inputMode="decimal" placeholder="e.g. 10000" value={truck.gvwr} onChange={e => setTruck({ ...truck, gvwr: e.target.value })} style={inputStyle(theme)} />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <label style={labelStyle(theme)}>GCWR (lb) — optional</label>
-                  <input type="number" inputMode="decimal" placeholder="leave blank if not on file" value={truck.gcwr} onChange={e => setTruck({ ...truck, gcwr: e.target.value })} style={inputStyle(theme)} />
+                  <label htmlFor="truck-gcwr" style={labelStyle(theme)}>GCWR (lb) — optional</label>
+                  <input id="truck-gcwr" type="number" inputMode="decimal" placeholder="leave blank if not on file" value={truck.gcwr} onChange={e => setTruck({ ...truck, gcwr: e.target.value })} style={inputStyle(theme)} />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <label style={labelStyle(theme)}>Front GAWR (lb)</label>
-                  <input type="number" inputMode="decimal" placeholder="e.g. 4500" value={truck.frontGawr} onChange={e => setTruck({ ...truck, frontGawr: e.target.value })} style={inputStyle(theme)} />
+                  <label htmlFor="truck-front-gawr" style={labelStyle(theme)}>Front GAWR (lb)</label>
+                  <input id="truck-front-gawr" type="number" inputMode="decimal" placeholder="e.g. 4500" value={truck.frontGawr} onChange={e => setTruck({ ...truck, frontGawr: e.target.value })} style={inputStyle(theme)} />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <label style={labelStyle(theme)}>Rear GAWR (lb)</label>
-                  <input type="number" inputMode="decimal" placeholder="e.g. 6500" value={truck.rearGawr} onChange={e => setTruck({ ...truck, rearGawr: e.target.value })} style={inputStyle(theme)} />
+                  <label htmlFor="truck-rear-gawr" style={labelStyle(theme)}>Rear GAWR (lb)</label>
+                  <input id="truck-rear-gawr" type="number" inputMode="decimal" placeholder="e.g. 6500" value={truck.rearGawr} onChange={e => setTruck({ ...truck, rearGawr: e.target.value })} style={inputStyle(theme)} />
                 </div>
               </div>
               <button disabled={!valid0} onClick={() => setStep(1)} style={{ marginTop: 26, width: '100%', height: 50, borderRadius: 999, border: 'none', background: ORANGE, color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer', opacity: valid0 ? 1 : 0.5 }}>Next</button>
@@ -139,11 +215,27 @@ export default function Calculator() {
             <>
               <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: '1.5rem' }}>Trailer ratings</h2>
               <p style={{ margin: '8px 0 22px', fontSize: '0.92rem', color: theme.text2, lineHeight: 1.55 }}>From the Trailer's certification label. GAWR is the single per-axle figure; Axle Count multiplies it into a group rating comparable to the Trailer Axle reading on a CAT Scale Ticket.</p>
+              {account && savedTrailers.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+                  <label htmlFor="trailer-profile-picker" style={labelStyle(theme)}>Load from Garage — optional</label>
+                  <select
+                    id="trailer-profile-picker"
+                    value={selectedTrailerId}
+                    onChange={e => pickTrailerProfile(e.target.value)}
+                    style={inputStyle(theme)}
+                  >
+                    <option value="">Select a saved Trailer…</option>
+                    {savedTrailers.map(t => (
+                      <option key={t.id} value={t.id}>{t.nickname}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={labelStyle(theme)}>GVWR (lb)</label><input type="number" inputMode="decimal" placeholder="e.g. 9500" value={trailer.gvwr} onChange={e => setTrailer({ ...trailer, gvwr: e.target.value })} style={inputStyle(theme)} /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={labelStyle(theme)}>GAWR per axle (lb)</label><input type="number" inputMode="decimal" placeholder="e.g. 5200" value={trailer.gawr} onChange={e => setTrailer({ ...trailer, gawr: e.target.value })} style={inputStyle(theme)} /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={labelStyle(theme)}>Axle Count</label><input type="number" min={1} max={10} step={1} value={trailer.axleCount} onChange={e => setTrailer({ ...trailer, axleCount: e.target.value })} style={inputStyle(theme)} /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={labelStyle(theme)}>UVW (lb) — optional</label><input type="number" inputMode="decimal" placeholder="leave blank if unknown" value={trailer.uvw} onChange={e => setTrailer({ ...trailer, uvw: e.target.value })} style={inputStyle(theme)} /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label htmlFor="trailer-gvwr" style={labelStyle(theme)}>GVWR (lb)</label><input id="trailer-gvwr" type="number" inputMode="decimal" placeholder="e.g. 9500" value={trailer.gvwr} onChange={e => setTrailer({ ...trailer, gvwr: e.target.value })} style={inputStyle(theme)} /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label htmlFor="trailer-gawr" style={labelStyle(theme)}>GAWR per axle (lb)</label><input id="trailer-gawr" type="number" inputMode="decimal" placeholder="e.g. 5200" value={trailer.gawr} onChange={e => setTrailer({ ...trailer, gawr: e.target.value })} style={inputStyle(theme)} /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label htmlFor="trailer-axle-count" style={labelStyle(theme)}>Axle Count</label><input id="trailer-axle-count" type="number" min={1} max={10} step={1} value={trailer.axleCount} onChange={e => setTrailer({ ...trailer, axleCount: e.target.value })} style={inputStyle(theme)} /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label htmlFor="trailer-uvw" style={labelStyle(theme)}>UVW (lb) — optional</label><input id="trailer-uvw" type="number" inputMode="decimal" placeholder="leave blank if unknown" value={trailer.uvw} onChange={e => setTrailer({ ...trailer, uvw: e.target.value })} style={inputStyle(theme)} /></div>
               </div>
               <div style={{ display: 'flex', gap: 12, marginTop: 26 }}>
                 <button onClick={() => setStep(0)} style={{ width: 120, height: 50, flex: 'none', borderRadius: 999, border: `2px solid ${GREEN}`, background: 'transparent', color: theme.linkStrong, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>Back</button>
