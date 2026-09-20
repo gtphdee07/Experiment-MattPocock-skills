@@ -64,25 +64,43 @@ def _checks_by_label(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {check["label"]: check for check in body["checks"]}
 
 
+# Issue #45 / ADR 0017: a One-Off Truck/Trailer's raw rating fields, mirroring
+# `TruckIn`/`TrailerIn`'s shape (see `test_http_truck_trailer_profiles.py`'s
+# `TRUCK_PAYLOAD`/`TRAILER_PAYLOAD`, deliberately different values here so a
+# One-Off's own ratings are never mistaken for a saved Profile's).
+ONE_OFF_TRUCK = {"gvwr": 9000.0, "front_gawr": 4000.0, "rear_gawr": 5200.0}
+ONE_OFF_TRAILER = {"gvwr": 7000.0, "gawr": 3000.0, "axle_count": 2}
+
+
 def _create_weigh_event(
     client: TestClient,
     *,
-    truck_id: int,
-    trailer_id: int,
+    truck_id: int | None = None,
+    truck: dict[str, Any] | None = None,
+    trailer_id: int | None = None,
+    trailer: dict[str, Any] | None = None,
     combined: dict[str, Any] | None = None,
     solo: dict[str, Any] | None = None,
     confirm_solo_link: bool = False,
 ) -> Any:
-    return client.post(
-        "/weigh-events",
-        json={
-            "truck_id": truck_id,
-            "trailer_id": trailer_id,
-            "combined": combined if combined is not None else BASE_COMBINED,
-            "solo": solo,
-            "confirm_solo_link": confirm_solo_link,
-        },
-    )
+    """`truck_id`/`truck` (and `trailer_id`/`trailer`) are each an
+    exactly-one-of pair - every pre-existing call site passes only
+    `truck_id`/`trailer_id`, unchanged, so this stays a pure superset of the
+    original helper (issue #45's own regression requirement)."""
+    body: dict[str, Any] = {
+        "combined": combined if combined is not None else BASE_COMBINED,
+        "solo": solo,
+        "confirm_solo_link": confirm_solo_link,
+    }
+    if truck_id is not None:
+        body["truck_id"] = truck_id
+    if truck is not None:
+        body["truck"] = truck
+    if trailer_id is not None:
+        body["trailer_id"] = trailer_id
+    if trailer is not None:
+        body["trailer"] = trailer
+    return client.post("/weigh-events", json=body)
 
 
 # --- Story 17: unauthenticated access -----------------------------------
@@ -592,3 +610,197 @@ def test_weigh_event_history_only_returns_own_garage(
     response = other_client.get("/weigh-events")
     assert response.status_code == 200
     assert response.json() == []
+
+
+# --- Issue #45 / ADR 0017: One-Off Truck/Trailer ----------------------------
+
+
+def test_create_weigh_event_one_off_truck_with_saved_trailer(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client, truck=ONE_OFF_TRUCK, trailer_id=trailer["id"]
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["truck_id"] is None
+    assert body["trailer_id"] == trailer["id"]
+    # No Nickname given -> the distinct One-Off fallback, not an ID-derived
+    # one (there is no ID) - CONTEXT.md: One-Off Truck.
+    assert body["truck_nickname"] == "One-Off Truck"
+    assert body["trailer_nickname"] == trailer["nickname"]
+
+
+def test_create_weigh_event_saved_truck_with_one_off_trailer(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    truck = _create_truck(client)
+
+    response = _create_weigh_event(
+        client, truck_id=truck["id"], trailer=ONE_OFF_TRAILER
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["truck_id"] == truck["id"]
+    assert body["trailer_id"] is None
+    assert body["trailer_nickname"] == "One-Off Trailer"
+
+
+def test_create_weigh_event_both_sides_one_off(client: TestClient) -> None:
+    _register_and_login(client)
+
+    response = _create_weigh_event(client, truck=ONE_OFF_TRUCK, trailer=ONE_OFF_TRAILER)
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["truck_id"] is None
+    assert body["trailer_id"] is None
+    assert body["truck_nickname"] == "One-Off Truck"
+    assert body["trailer_nickname"] == "One-Off Trailer"
+
+
+def test_create_weigh_event_one_off_uses_given_nickname_when_present(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+
+    response = _create_weigh_event(
+        client,
+        truck={**ONE_OFF_TRUCK, "nickname": "Borrowed Bertha"},
+        trailer={**ONE_OFF_TRAILER, "nickname": "Rented Rig"},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["truck_nickname"] == "Borrowed Bertha"
+    assert body["trailer_nickname"] == "Rented Rig"
+
+
+def test_create_weigh_event_one_off_truck_does_not_create_a_truck_profile(
+    client: TestClient,
+) -> None:
+    """Story 9 / ADR 0017: One-Off is true end-to-end - no Truck Profile row
+    is silently created, so the Garage's own list stays empty."""
+    _register_and_login(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client, truck=ONE_OFF_TRUCK, trailer_id=trailer["id"]
+    )
+    assert response.status_code == 201, response.text
+
+    assert client.get("/trucks").json() == []
+
+
+def test_create_weigh_event_one_off_truck_appears_null_in_history(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    trailer = _create_trailer(client)
+    created = _create_weigh_event(client, truck=ONE_OFF_TRUCK, trailer_id=trailer["id"])
+    assert created.status_code == 201, created.text
+
+    history = client.get("/weigh-events")
+    assert history.status_code == 200
+    [entry] = history.json()
+    assert entry["truck_id"] is None
+    assert entry["trailer_id"] == trailer["id"]
+
+
+def test_create_weigh_event_missing_truck_side_returns_422(client: TestClient) -> None:
+    _register_and_login(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(client, trailer_id=trailer["id"])
+
+    assert response.status_code == 422
+
+
+def test_create_weigh_event_both_truck_id_and_truck_returns_422(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    truck = _create_truck(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client, truck_id=truck["id"], truck=ONE_OFF_TRUCK, trailer_id=trailer["id"]
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_weigh_event_missing_trailer_side_returns_422(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    truck = _create_truck(client)
+
+    response = _create_weigh_event(client, truck_id=truck["id"])
+
+    assert response.status_code == 422
+
+
+def test_create_weigh_event_both_trailer_id_and_trailer_returns_422(
+    client: TestClient,
+) -> None:
+    _register_and_login(client)
+    truck = _create_truck(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client, truck_id=truck["id"], trailer_id=trailer["id"], trailer=ONE_OFF_TRAILER
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_weigh_event_reused_solo_on_one_off_truck_returns_404(
+    client: TestClient,
+) -> None:
+    """Story 8: a One-Off Truck has no history to reuse a Solo Ticket from,
+    by definition - a hand-crafted request that tries anyway (the real
+    frontend never offers this) is rejected the same way an unknown
+    `from_timestamp` is."""
+    _register_and_login(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client,
+        truck=ONE_OFF_TRUCK,
+        trailer_id=trailer["id"],
+        solo={
+            "kind": "reused",
+            "from_timestamp": "2026-01-01T00:00:00+00:00",
+            "gross": 9000.0,
+            "adjusted": False,
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_regular_weigh_event_still_exposes_real_truck_and_trailer_ids(
+    client: TestClient,
+) -> None:
+    """Regression: both sides as saved Profile IDs still work unchanged, and
+    the new `truck_id`/`trailer_id` response fields round-trip the real IDs
+    (not `None`) for a non-One-Off entry."""
+    _register_and_login(client)
+    truck = _create_truck(client)
+    trailer = _create_trailer(client)
+
+    response = _create_weigh_event(
+        client, truck_id=truck["id"], trailer_id=trailer["id"]
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["truck_id"] == truck["id"]
+    assert body["trailer_id"] == trailer["id"]

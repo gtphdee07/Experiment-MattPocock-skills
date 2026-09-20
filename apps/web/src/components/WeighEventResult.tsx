@@ -1,5 +1,6 @@
 import ResultBox from './ResultBox';
 import { BANNER, BANNER_MESSAGE } from '../theme';
+import type { Theme } from '../theme';
 import { useAppTheme } from '../theme/ThemeContext';
 import type { WeighEventOut } from '../types';
 
@@ -7,6 +8,30 @@ import type { WeighEventOut } from '../types';
  * the new framing a persisted Weigh Event needs - id/timestamp/Nicknames
  * (issue #30 Story 25/29/32: "reusing the calculator's own results
  * rendering... only new framing wraps the same grid"). */
+// Issue #45 / ADR 0017: a small, always-visible marker for a One-Off Truck/
+// Trailer - shown whenever that side's `truck_id`/`trailer_id` is `null`,
+// regardless of whether it has a Nickname (Story 4: never mistaken for a
+// real, reusable Garage Profile).
+function OneOffBadge({ theme }: { theme: Theme }) {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        marginLeft: 6,
+        padding: '1px 8px',
+        borderRadius: 999,
+        fontSize: '0.7rem',
+        fontWeight: 700,
+        color: theme.text2,
+        border: `1px solid ${theme.border}`,
+        verticalAlign: 'middle',
+      }}
+    >
+      (one-off)
+    </span>
+  );
+}
+
 export default function WeighEventResult({ event }: { event: WeighEventOut }) {
   const { theme, mode } = useAppTheme();
   const banner = BANNER[mode][event.overall_status];
@@ -15,7 +40,10 @@ export default function WeighEventResult({ event }: { event: WeighEventOut }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ fontWeight: 700 }}>
-          <span>{event.truck_nickname}</span> + <span>{event.trailer_nickname}</span>
+          <span>{event.truck_nickname}</span>
+          {event.truck_id === null && <OneOffBadge theme={theme} />} +{' '}
+          <span>{event.trailer_nickname}</span>
+          {event.trailer_id === null && <OneOffBadge theme={theme} />}
         </div>
         <div style={{ color: theme.text2, fontSize: '0.85rem' }}>
           {new Date(event.timestamp).toLocaleString()}

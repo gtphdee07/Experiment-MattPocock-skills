@@ -9,17 +9,20 @@ import type { WeighEventOut } from '../types';
 vi.mock('../api');
 const mockedApi = vi.mocked(api);
 
-function makeEvent(id: number): WeighEventOut {
+function makeEvent(id: number, overrides: Partial<WeighEventOut> = {}): WeighEventOut {
   return {
     id,
     timestamp: `2026-01-0${id}T00:00:00Z`,
     truck_nickname: `Truck ${id}`,
     trailer_nickname: `Trailer ${id}`,
+    truck_id: id,
+    trailer_id: id,
     overall_status: 'pass',
     checks: [{ label: 'Steer', status: 'pass', actual: 1, rating: 2, note: null }],
     time_gap_hours: null,
     time_gap_exceeds_threshold: null,
     disclaimer: 'd',
+    ...overrides,
   };
 }
 
@@ -68,5 +71,41 @@ describe('WeighEventHistory', () => {
 
     expect(await screen.findByText('Truck 7')).toBeInTheDocument();
     expect(screen.getByText('Trailer 7')).toBeInTheDocument();
+  });
+
+  // --- Issue #45 / ADR 0017: One-Off Truck/Trailer badge/fallback ---------
+
+  it('shows a "(one-off)" badge for a One-Off entry even when it has a Nickname (Story 4)', async () => {
+    mockedApi.listWeighEvents.mockResolvedValueOnce([
+      makeEvent(1, { truck_id: null, truck_nickname: 'Borrowed Bertha' }),
+    ]);
+    renderPage();
+
+    await screen.findByText('Borrowed Bertha');
+    expect(screen.getAllByText('(one-off)')).toHaveLength(1);
+  });
+
+  it('shows the distinct "One-Off Truck"/"One-Off Trailer" fallback label, not an ID-derived one (Story 5)', async () => {
+    mockedApi.listWeighEvents.mockResolvedValueOnce([
+      makeEvent(1, {
+        truck_id: null,
+        trailer_id: null,
+        truck_nickname: 'One-Off Truck',
+        trailer_nickname: 'One-Off Trailer',
+      }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('One-Off Truck')).toBeInTheDocument();
+    expect(screen.getByText('One-Off Trailer')).toBeInTheDocument();
+    expect(screen.getAllByText('(one-off)')).toHaveLength(2);
+  });
+
+  it('shows no "(one-off)" badge for an entry with two real, saved Profiles', async () => {
+    mockedApi.listWeighEvents.mockResolvedValueOnce([makeEvent(3)]);
+    renderPage();
+
+    await screen.findByText('Truck 3');
+    expect(screen.queryByText('(one-off)')).not.toBeInTheDocument();
   });
 });

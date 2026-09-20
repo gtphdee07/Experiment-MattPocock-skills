@@ -48,13 +48,25 @@ def record_weigh_event(
     reused_solo_from_timestamp: str | None,
     weigh_event_store: WeighEventStore,
     now: Callable[[], str],
+    truck_is_one_off: bool = False,
+    trailer_is_one_off: bool = False,
 ) -> tuple[RigEvaluation, WeighEventRecord] | list[Problem]:
     """Evaluate and persist one Weigh Event, non-interactively.
 
     Returns `(evaluation, record)` on success, or a non-empty `list[Problem]`
     when a precondition fails: no Truck Profile, no Trailer Profile, or a
-    selected Profile that has never been saved (no `id`). The `record` is the
-    one built and handed to `weigh_event_store.save`.
+    selected Profile that has never been saved (no `id`) *and* isn't an
+    explicit One-Off. The `record` is the one built and handed to
+    `weigh_event_store.save`.
+
+    `truck_is_one_off`/`trailer_is_one_off` (issue #45 / ADR 0017) mark a
+    side as a One-Off Truck/Trailer - entered for this Weigh Event only,
+    deliberately never saved as a real Profile, so `truck.id`/`trailer.id`
+    being `None` is expected, not the "selected Profile was never saved"
+    caller bug the check below still catches for every other caller (in
+    particular the CLI, which never passes either flag and always selects
+    from already-saved Profiles). Both default `False` so every existing
+    caller's behavior is unchanged.
     """
     if truck is None:
         return [
@@ -70,7 +82,9 @@ def record_weigh_event(
                 "No Trailer Profiles saved yet. Add one with 'trailer add' first.",
             )
         ]
-    if truck.id is None or trailer.id is None:
+    if (truck.id is None and not truck_is_one_off) or (
+        trailer.id is None and not trailer_is_one_off
+    ):
         return [
             Problem(
                 "profile_missing_id",
@@ -91,9 +105,20 @@ def record_weigh_event(
     # Snapshot the Nickname (or its computed default) each Profile had right
     # now, at save time - not a live reference - so a later rename or
     # deletion never changes how this entry renders in history (see
-    # CONTEXT.md: Nickname, ADR 0004).
-    truck_nickname = _display_nickname(truck.nickname, "Truck", truck.id)
-    trailer_nickname = _display_nickname(trailer.nickname, "Trailer", trailer.id)
+    # CONTEXT.md: Nickname, ADR 0004). A One-Off side has no `id` to derive
+    # an ID-based default from, so it gets its own distinct fallback
+    # ("One-Off Truck"/"One-Off Trailer") instead of `_display_nickname`'s
+    # "Truck {id}" shape (CONTEXT.md: One-Off Truck/Trailer).
+    truck_nickname = (
+        (truck.nickname if truck.nickname is not None else "One-Off Truck")
+        if truck_is_one_off
+        else _display_nickname(truck.nickname, "Truck", truck.id)
+    )
+    trailer_nickname = (
+        (trailer.nickname if trailer.nickname is not None else "One-Off Trailer")
+        if trailer_is_one_off
+        else _display_nickname(trailer.nickname, "Trailer", trailer.id)
+    )
 
     record = WeighEventRecord(
         truck_id=truck.id,
