@@ -8,15 +8,15 @@ check needed, the scoped query just matches nothing" pattern that module's
 docstring explains.
 
 **Async/sync boundary (ADR 0015, restated in issue #21's own brief)**:
-`towing_app.services.record_weigh_event` is reused **unmodified** and is
-fully synchronous. Every route handler here is `async def` (matching the
-rest of `apps/backend`), so every call that touches
-`towing_backend.weigh_events_store.BackendWeighEventStore` (itself built on
-a synchronous SQLAlchemy engine - see `towing_backend.sync_db`) or
-`record_weigh_event` is offloaded via `fastapi.concurrency.run_in_threadpool`
-- never called inline on the event loop. This is the exact pattern
-`towing_backend.photo_ocr`'s `_run_extraction` already established for
-issue #20's synchronous Claude-vision adapter calls.
+`towing_app.services.record_weigh_event` is fully synchronous. Every route
+handler here is `async def` (matching the rest of `apps/backend`), so every
+call that touches `towing_backend.weigh_events_store.BackendWeighEventStore`
+(itself built on a synchronous SQLAlchemy engine - see
+`towing_backend.sync_db`) or `record_weigh_event` is offloaded via
+`fastapi.concurrency.run_in_threadpool` - never called inline on the event
+loop. This is the exact pattern `towing_backend.photo_ocr`'s
+`_run_extraction` already established for issue #20's synchronous
+Claude-vision adapter calls.
 
 **Solo Ticket request shape**: `WeighEventCreateRequest.solo` is a
 Pydantic-discriminated union (tag field `kind`) between `FreshSoloTicketIn`
@@ -25,6 +25,16 @@ one of: no Solo Ticket at all; a fresh Solo Ticket; a reused Solo Ticket"
 shape, which doesn't name an exact wire discriminator. `isinstance` (not a
 literal-tag `match`/`if kind ==` chain) narrows it below, for the most
 unambiguous mypy narrowing across two `BaseModel` subclasses.
+
+**One-Off Truck/Trailer (issue #45 / ADR 0017)**: `WeighEventCreateRequest`
+gains a second exactly-one-of pair per side - `truck_id` (a real, saved
+Truck Profile) XOR `truck` (a One-Off Truck's raw rating fields, mirroring
+`TruckIn`'s shape exactly), same for `trailer_id`/`trailer` - enforced by
+the request's own `model_validator` below, so an invalid combination is a
+422 before any business logic runs. `record_weigh_event` itself gained two
+new, default-`False` keyword-only flags (`truck_is_one_off`/
+`trailer_is_one_off`) for this - every other caller (in particular the CLI)
+passes neither and is unaffected; see that function's own docstring.
 """
 
 from __future__ import annotations
@@ -34,7 +44,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -46,6 +56,7 @@ from towing_backend.profiles_routes import (
     AsyncSessionDependency,
     CurrentAccountDependency,
 )
+from towing_backend.schemas import TrailerIn, TruckIn
 from towing_backend.weigh_events_store import BackendWeighEventStore
 from towing_core.evaluation import RigEvaluation, rig_evaluation_from_record
 from towing_core.linking import _find_last_solo_ticket_record, reweigh_references_match
@@ -88,8 +99,19 @@ class ReusedSoloTicketIn(BaseModel):
 
 
 class WeighEventCreateRequest(BaseModel):
-    truck_id: int
-    trailer_id: int
+    """`truck_id`/`truck` (and `trailer_id`/`trailer`) are each an
+    exactly-one-of pair (issue #45 / ADR 0017): a real, saved Truck/Trailer
+    Profile's id, or a One-Off Truck/Trailer's raw rating fields - `TruckIn`/
+    `TrailerIn` reused directly rather than duplicated, since a One-Off's
+    shape (ratings plus an optional Nickname) is exactly `TruckIn`/
+    `TrailerIn`'s own shape. Neither or both present on a side is rejected
+    by `_exactly_one_truck_and_trailer_source` below, as a 422, before any
+    business logic runs (fail fast, CODING_STANDARDS.md section 6)."""
+
+    truck_id: int | None = None
+    truck: TruckIn | None = None
+    trailer_id: int | None = None
+    trailer: TrailerIn | None = None
     combined: CombinedTicketIn
     solo: FreshSoloTicketIn | ReusedSoloTicketIn | None = Field(
         default=None, discriminator="kind"
@@ -97,6 +119,18 @@ class WeighEventCreateRequest(BaseModel):
     # Only meaningful with a fresh Solo Ticket whose Reweigh Reference didn't
     # auto-match - see the 409 branch in `create_weigh_event` below.
     confirm_solo_link: bool = False
+
+    @model_validator(mode="after")
+    def _exactly_one_truck_and_trailer_source(self) -> WeighEventCreateRequest:
+        if (self.truck_id is None) == (self.truck is None):
+            raise ValueError(
+                "Exactly one of truck_id or truck (a One-Off Truck) is required"
+            )
+        if (self.trailer_id is None) == (self.trailer is None):
+            raise ValueError(
+                "Exactly one of trailer_id or trailer (a One-Off Trailer) is required"
+            )
+        return self
 
 
 class CheckOut(BaseModel):
@@ -117,6 +151,12 @@ class WeighEventOut(BaseModel):
     timestamp: str
     truck_nickname: str
     trailer_nickname: str
+    # Issue #45 / ADR 0017: `None` exactly when that side is a One-Off Truck/
+    # Trailer - the frontend keys its "(one-off)" badge and fallback label
+    # off this, not off Nickname presence/absence (a One-Off can still have
+    # a user-given Nickname and must still show the badge).
+    truck_id: int | None
+    trailer_id: int | None
     overall_status: str
     # Fixed order: Steer, Drive, Trailer Axle, Hitched GVWR, GCWR, Trailer GVWR
     checks: list[CheckOut]
@@ -225,20 +265,36 @@ def build_weigh_events_router(
         timestamp: str,
         truck_nickname: str | None,
         trailer_nickname: str | None,
-        truck_id: int,
-        trailer_id: int,
+        truck_id: int | None,
+        trailer_id: int | None,
     ) -> WeighEventOut:
         # `truck_nickname`/`trailer_nickname` are `None` only for a record
         # persisted before the Nickname snapshot field existed (see
         # `WeighEventRecord`'s docstring) - unreachable for a brand new
         # table, but the same pre-Nickname fallback ADR 0004 already
-        # specifies is applied defensively rather than assumed away.
+        # specifies is applied defensively rather than assumed away. A
+        # `None` id (One-Off) has no ID to build that fallback from, so it
+        # falls back to the One-Off's own distinct default instead
+        # (CONTEXT.md: One-Off Truck/Trailer) - unreachable too in practice,
+        # since `record_weigh_event` already snapshots one of those two
+        # defaults into `truck_nickname`/`trailer_nickname` whenever no
+        # Nickname was given.
         time_gap_result = evaluation.time_gap_result
+        truck_fallback = (
+            f"Truck Profile #{truck_id}" if truck_id is not None else "One-Off Truck"
+        )
+        trailer_fallback = (
+            f"Trailer Profile #{trailer_id}"
+            if trailer_id is not None
+            else "One-Off Trailer"
+        )
         return WeighEventOut(
             id=id,
             timestamp=timestamp,
-            truck_nickname=truck_nickname or f"Truck Profile #{truck_id}",
-            trailer_nickname=trailer_nickname or f"Trailer Profile #{trailer_id}",
+            truck_nickname=truck_nickname or truck_fallback,
+            trailer_nickname=trailer_nickname or trailer_fallback,
+            truck_id=truck_id,
+            trailer_id=trailer_id,
             overall_status=evaluation.overall_status.value,
             checks=_checks_from_evaluation(evaluation),
             time_gap_hours=(
@@ -292,33 +348,62 @@ def build_weigh_events_router(
     ) -> WeighEventOut:
         garage_id = await _caller_garage_id(account, session)
 
-        truck_row = await truck_profiles.get_truck_profile(
-            session, id=payload.truck_id, garage_id=garage_id
-        )
-        if truck_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        trailer_row = await trailer_profiles.get_trailer_profile(
-            session, id=payload.trailer_id, garage_id=garage_id
-        )
-        if trailer_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # Issue #45 / ADR 0017: `WeighEventCreateRequest`'s own validator
+        # already guarantees exactly one of `truck_id`/`truck` (and
+        # `trailer_id`/`trailer`) is present - the `assert`s below just
+        # narrow that guarantee for mypy at each branch.
+        truck_is_one_off = payload.truck is not None
+        trailer_is_one_off = payload.trailer is not None
 
-        truck = TruckProfile(
-            gvwr=truck_row.gvwr,
-            front_gawr=truck_row.front_gawr,
-            rear_gawr=truck_row.rear_gawr,
-            gcwr=truck_row.gcwr,
-            nickname=truck_row.nickname,
-            id=truck_row.id,
-        )
-        trailer = TrailerProfile(
-            gvwr=trailer_row.gvwr,
-            gawr=trailer_row.gawr,
-            axle_count=trailer_row.axle_count,
-            uvw=trailer_row.uvw,
-            nickname=trailer_row.nickname,
-            id=trailer_row.id,
-        )
+        if truck_is_one_off:
+            assert payload.truck is not None
+            truck = TruckProfile(
+                gvwr=payload.truck.gvwr,
+                front_gawr=payload.truck.front_gawr,
+                rear_gawr=payload.truck.rear_gawr,
+                gcwr=payload.truck.gcwr,
+                nickname=payload.truck.nickname,
+            )
+        else:
+            assert payload.truck_id is not None
+            truck_row = await truck_profiles.get_truck_profile(
+                session, id=payload.truck_id, garage_id=garage_id
+            )
+            if truck_row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            truck = TruckProfile(
+                gvwr=truck_row.gvwr,
+                front_gawr=truck_row.front_gawr,
+                rear_gawr=truck_row.rear_gawr,
+                gcwr=truck_row.gcwr,
+                nickname=truck_row.nickname,
+                id=truck_row.id,
+            )
+
+        if trailer_is_one_off:
+            assert payload.trailer is not None
+            trailer = TrailerProfile(
+                gvwr=payload.trailer.gvwr,
+                gawr=payload.trailer.gawr,
+                axle_count=payload.trailer.axle_count,
+                uvw=payload.trailer.uvw,
+                nickname=payload.trailer.nickname,
+            )
+        else:
+            assert payload.trailer_id is not None
+            trailer_row = await trailer_profiles.get_trailer_profile(
+                session, id=payload.trailer_id, garage_id=garage_id
+            )
+            if trailer_row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            trailer = TrailerProfile(
+                gvwr=trailer_row.gvwr,
+                gawr=trailer_row.gawr,
+                axle_count=trailer_row.axle_count,
+                uvw=trailer_row.uvw,
+                nickname=trailer_row.nickname,
+                id=trailer_row.id,
+            )
         combined = CombinedTicket(
             steer=payload.combined.steer,
             drive=payload.combined.drive,
@@ -358,6 +443,14 @@ def build_weigh_events_router(
                 )
             time_gap_hours = fresh.time_gap_hours
         else:
+            # A reused Solo Ticket is keyed on a real, persistent `truck_id`
+            # (Story 8 / ADR 0017) - a One-Off Truck has no history to reuse
+            # from, by definition. The real frontend never offers "reuse"
+            # for a One-Off Truck (it skips the reusable-Solo-Ticket lookup
+            # entirely); this rejects a hand-crafted request the same way an
+            # unknown `from_timestamp` is rejected below.
+            if truck_is_one_off or payload.truck_id is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
             reused = payload.solo
             past_records = await run_in_threadpool(store.list)
             match = _find_reusable_solo_ticket_record(
@@ -385,13 +478,19 @@ def build_weigh_events_router(
                 reused_solo_from_timestamp=reused_solo_from_timestamp,
                 weigh_event_store=store,
                 now=iso_now,
+                truck_is_one_off=truck_is_one_off,
+                trailer_is_one_off=trailer_is_one_off,
             )
 
         outcome = await run_in_threadpool(_persist)
         if isinstance(outcome, list):
             # Unreachable per issue #21's own Implementation Decisions - see
-            # module docstring. Surfaced as a 500, not silently swallowed,
-            # so a real regression here is never hidden.
+            # module docstring (still true: every precondition
+            # `record_weigh_event` can fail on - a missing Truck/Trailer
+            # Profile, or one with no id and no One-Off flag - is already
+            # excluded above before `_persist` ever runs). Surfaced as a
+            # 500, not silently swallowed, so a real regression here is
+            # never hidden.
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=[problem.message for problem in outcome],

@@ -228,6 +228,122 @@ def test_record_round_trips_reused_solo_from_timestamp() -> None:
     assert record.reused_solo_from_timestamp == "2025-12-31T12:00:00+00:00"
 
 
+# --- Issue #45 / ADR 0017: One-Off Truck/Trailer ----------------------------
+
+
+def test_record_allows_one_off_truck_with_no_id() -> None:
+    """A One-Off Truck (`truck_is_one_off=True`) is exempt from the
+    "profile_missing_id" precondition above - its `id` is `None` by
+    definition (ADR 0017: never saved as a real Truck Profile), not a sign
+    of a caller bug."""
+    store = InMemoryWeighEventStore()
+    one_off_truck = TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, gcwr=32500
+    )
+
+    result = record_weigh_event(
+        one_off_truck,
+        TRAILER,
+        COMBINED,
+        None,
+        solo_is_unverified=False,
+        time_gap_hours=None,
+        reused_solo_from_timestamp=None,
+        weigh_event_store=store,
+        now=_fixed_now,
+        truck_is_one_off=True,
+    )
+
+    assert isinstance(result, tuple)
+    _, record = result
+    assert record.truck_id is None
+    assert record.trailer_id == 2
+    # No ID to compute a "Truck N" fallback from - a distinct fallback,
+    # per CONTEXT.md's One-Off Truck entry.
+    assert record.truck_nickname == "One-Off Truck"
+
+    [saved] = store.list()
+    assert saved.truck_id is None
+
+
+def test_record_allows_one_off_trailer_with_no_id() -> None:
+    store = InMemoryWeighEventStore()
+    one_off_trailer = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3)
+
+    result = record_weigh_event(
+        TRUCK,
+        one_off_trailer,
+        COMBINED,
+        None,
+        solo_is_unverified=False,
+        time_gap_hours=None,
+        reused_solo_from_timestamp=None,
+        weigh_event_store=store,
+        now=_fixed_now,
+        trailer_is_one_off=True,
+    )
+
+    assert isinstance(result, tuple)
+    _, record = result
+    assert record.trailer_id is None
+    assert record.trailer_nickname == "One-Off Trailer"
+
+
+def test_record_one_off_truck_uses_given_nickname_when_present() -> None:
+    """A One-Off Truck's own Nickname (Story 3) is stored as given - it
+    never gets the ID-derived fallback ("Truck N"), since there is no ID."""
+    store = InMemoryWeighEventStore()
+    one_off_truck = TruckProfile(
+        gvwr=14000, front_gawr=6000, rear_gawr=9900, nickname="Borrowed Bertha"
+    )
+
+    result = record_weigh_event(
+        one_off_truck,
+        TRAILER,
+        COMBINED,
+        None,
+        solo_is_unverified=False,
+        time_gap_hours=None,
+        reused_solo_from_timestamp=None,
+        weigh_event_store=store,
+        now=_fixed_now,
+        truck_is_one_off=True,
+    )
+
+    assert isinstance(result, tuple)
+    _, record = result
+    assert record.truck_nickname == "Borrowed Bertha"
+
+
+def test_record_both_sides_one_off() -> None:
+    store = InMemoryWeighEventStore()
+    one_off_truck = TruckProfile(gvwr=14000, front_gawr=6000, rear_gawr=9900)
+    one_off_trailer = TrailerProfile(gvwr=23500, gawr=8000, axle_count=3)
+
+    result = record_weigh_event(
+        one_off_truck,
+        one_off_trailer,
+        COMBINED,
+        None,
+        solo_is_unverified=False,
+        time_gap_hours=None,
+        reused_solo_from_timestamp=None,
+        weigh_event_store=store,
+        now=_fixed_now,
+        truck_is_one_off=True,
+        trailer_is_one_off=True,
+    )
+
+    assert isinstance(result, tuple)
+    _, record = result
+    assert record.truck_id is None
+    assert record.trailer_id is None
+
+    [saved] = store.list()
+    assert saved.truck_id is None
+    assert saved.trailer_id is None
+
+
 def test_record_returns_the_same_evaluation_as_evaluate_weigh_event() -> None:
     store = InMemoryWeighEventStore()
 

@@ -350,6 +350,37 @@ def test_real_insert_weigh_event_round_trip() -> None:
     run(body())
 
 
+def test_real_insert_weigh_event_with_null_truck_and_trailer_id_round_trips() -> None:
+    """Issue #45 / ADR 0017: confirms the nullable `truck_id`/`trailer_id`
+    columns (migration 0004) behave the same on real Postgres as SQLite -
+    the dialect-drift class of bug this tier exists to catch."""
+    session = _make_session()
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session)
+
+            await session.execute(
+                insert(weigh_events).values(
+                    garage_id=owner.garage_id,
+                    **{**_WEIGH_EVENT_VALUES, "truck_id": None, "trailer_id": None},
+                )
+            )
+            await session.commit()
+
+            row = (
+                await session.execute(
+                    select(weigh_events).where(
+                        weigh_events.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert row.truck_id is None
+            assert row.trailer_id is None
+
+    run(body())
+
+
 def test_real_weigh_event_with_nonexistent_garage_violates_foreign_key() -> None:
     session = _make_session()
 

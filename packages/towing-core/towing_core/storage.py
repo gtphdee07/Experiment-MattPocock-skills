@@ -56,10 +56,17 @@ class WeighEventRecord:
     real string; `None` here is reserved for a record persisted before this
     field existed (see `SqliteWeighEventStore`'s nullable column), and is
     rendered with the pre-Nickname fallback ("Truck Profile #{truck_id}")
-    rather than a guess at a Nickname that was never captured."""
+    rather than a guess at a Nickname that was never captured.
 
-    truck_id: int
-    trailer_id: int
+    `truck_id`/`trailer_id` are `None` exactly when that side is a One-Off
+    Truck/Trailer - entered for this Weigh Event only, never saved as a
+    real Truck/Trailer Profile (see CONTEXT.md: One-Off Truck/Trailer, ADR
+    0017). The CLI (`cli.run_weigh_event`) never produces `None` here - it
+    only ever selects from already-saved Profiles - this is a
+    `towing_backend`-only case (issue #45)."""
+
+    truck_id: int | None
+    trailer_id: int | None
     ticket: CombinedTicket
     axle_result: AxleOverloadResult
     gvwr_result: HitchedGvwrOverloadResult

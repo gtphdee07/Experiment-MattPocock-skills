@@ -329,6 +329,49 @@ test.describe('authenticated journey', () => {
     await expect(page.getByText('Steer Axle', { exact: true })).toBeVisible();
   });
 
+  test('records a Weigh Event with a One-Off Truck and a saved Trailer Profile, and sees the one-off badge in history (issue #45 / ADR 0017)', async ({ page }) => {
+    const email = uniqueEmail('oneoff');
+    await registerAndLogin(page, email);
+    await addTrailer(page, 'Goose OneOff');
+
+    await page.goto('/weigh-events/new');
+    // No Truck Profile was ever saved - the picker isn't blocked (Story 6),
+    // a One-Off Truck is entered inline instead.
+    await page.getByLabel('Truck Profile').selectOption({ label: 'Enter a one-off Truck' });
+    await page.getByLabel('GVWR (lb)').fill('9000');
+    await page.getByLabel('Front GAWR (lb)').fill('4000');
+    await page.getByLabel('Rear GAWR (lb)').fill('5200');
+    await page.getByLabel('Nickname — optional').fill('Borrowed Bertha');
+    await page.getByRole('button', { name: 'Use this Truck' }).click();
+
+    await page.getByLabel('Trailer Profile').selectOption({ label: 'Goose OneOff' });
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    await page.getByLabel('Steer Axle (lb)').fill('4300');
+    await page.getByLabel('Drive Axle (lb)').fill('6100');
+    await page.getByLabel('Trailer Axle group (lb)').fill('9200');
+    await page.getByLabel('Gross Weight (lb)').fill('19600');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Story 8: no reusable-Solo-Ticket checking state for a One-Off Truck -
+    // straight to "no reusable weight" with no delay.
+    await expect(page.getByText(/No reusable Solo weight/)).toBeVisible();
+    await page.getByLabel('Skip the Solo Ticket').check();
+    await page.getByRole('button', { name: 'See results' }).click();
+
+    await expect(page.getByText('Steer Axle', { exact: true })).toBeVisible();
+    await expect(page.getByText('Borrowed Bertha')).toBeVisible();
+    await expect(page.getByText('(one-off)').first()).toBeVisible();
+
+    await page.getByRole('link', { name: 'View history' }).click();
+    await expect(page).toHaveURL(/\/weigh-events$/);
+    await expect(page.getByText('Borrowed Bertha')).toBeVisible();
+    await expect(page.getByText('Goose OneOff')).toBeVisible();
+    // Story 4: the badge shows even though this One-Off Truck has a
+    // Nickname - only one badge (the Trailer side is a real saved Profile).
+    await expect(page.getByText('(one-off)')).toHaveCount(1);
+  });
+
   test('logs out and confirms a protected route redirects to login again (Story 7/8)', async ({ page }) => {
     const email = uniqueEmail('logout');
     await registerAndLogin(page, email);

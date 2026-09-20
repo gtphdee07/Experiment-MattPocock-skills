@@ -180,6 +180,75 @@ def test_weigh_event_with_nonexistent_garage_violates_foreign_key(
     run(body())
 
 
+# --- Issue #45 / ADR 0017: One-Off Truck/Trailer (nullable truck_id/
+# trailer_id) --------------------------------------------------------------
+
+
+def test_insert_weigh_event_with_null_truck_id_round_trips(settings: Settings) -> None:
+    """Migration 0004 dropped the NOT NULL constraint - a One-Off Truck's
+    side stores `NULL` here, with its raw ratings landing in the existing
+    snapshot columns (`steer_rating` etc.) exactly as a real Profile's would."""
+    session = _make_session(settings)
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session, email="addie@example.com")
+
+            await session.execute(
+                insert(weigh_events).values(
+                    garage_id=owner.garage_id,
+                    **{
+                        **WEIGH_EVENT_VALUES,
+                        "truck_id": None,
+                        "truck_nickname": "One-Off Truck",
+                    },
+                )
+            )
+            await session.commit()
+
+            row = (
+                await session.execute(
+                    select(weigh_events).where(
+                        weigh_events.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert row.truck_id is None
+            assert row.trailer_id == 1
+            assert row.truck_nickname == "One-Off Truck"
+            assert row.steer_rating == WEIGH_EVENT_VALUES["steer_rating"]
+
+    run(body())
+
+
+def test_insert_weigh_event_with_both_ids_null_round_trips(settings: Settings) -> None:
+    session = _make_session(settings)
+
+    async def body() -> None:
+        async with session:
+            owner = await _insert_account_and_garage(session, email="addie@example.com")
+
+            await session.execute(
+                insert(weigh_events).values(
+                    garage_id=owner.garage_id,
+                    **{**WEIGH_EVENT_VALUES, "truck_id": None, "trailer_id": None},
+                )
+            )
+            await session.commit()
+
+            row = (
+                await session.execute(
+                    select(weigh_events).where(
+                        weigh_events.c.garage_id == owner.garage_id
+                    )
+                )
+            ).one()
+            assert row.truck_id is None
+            assert row.trailer_id is None
+
+    run(body())
+
+
 # --- ON DELETE CASCADE, from Account all the way down to weigh_events ----
 
 

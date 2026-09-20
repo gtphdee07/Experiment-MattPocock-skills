@@ -117,6 +117,14 @@ trailer_profiles = Table(
 # Truck/Trailer Profile has been deleted. A hard FK here would force a
 # cascade-or-block decision on Truck/Trailer Profile deletion that #19 never
 # specified and this issue doesn't ask for.
+#
+# Issue #45 / ADR 0017: `truck_id`/`trailer_id` are `nullable=True` (added by
+# migration 0004, which only drops the NOT NULL constraint - nothing else
+# about these columns changes) so a One-Off Truck/Trailer - entered for a
+# single Weigh Event, never saved as a real Truck/Trailer Profile - can be
+# represented as `NULL` here instead of forcing a Profile row to exist. See
+# that ADR's "Consequences": any code reading these columns must treat
+# `NULL` as a real, expected case from here on.
 weigh_events = Table(
     "weigh_events",
     metadata,
@@ -128,8 +136,8 @@ weigh_events = Table(
         nullable=False,
         index=True,
     ),
-    Column("truck_id", Integer, nullable=False),
-    Column("trailer_id", Integer, nullable=False),
+    Column("truck_id", Integer, nullable=True),
+    Column("trailer_id", Integer, nullable=True),
     Column("steer", Float, nullable=False),
     Column("drive", Float, nullable=False),
     Column("trailer_axle", Float, nullable=False),

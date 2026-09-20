@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import Card from '../components/Card';
 import { NumberField, TextField } from '../components/form/Field';
 import { PrimaryButton, SecondaryButton } from '../components/form/Button';
+import TruckProfileForm from '../components/garage/TruckProfileForm';
+import TrailerProfileForm from '../components/garage/TrailerProfileForm';
 import WeighEventResult from '../components/WeighEventResult';
 import { useAppTheme } from '../theme/ThemeContext';
 import { validatePositive } from '../validation';
@@ -12,12 +14,22 @@ import type {
   ReusableSoloTicket,
   SoloTicketIn,
   TrailerProfile,
+  TrailerProfileIn,
   TruckProfile,
+  TruckProfileIn,
   WeighEventOut,
 } from '../types';
 
 type Step = 'pick' | 'combined' | 'solo' | 'result';
 type SoloMode = 'none' | 'reuse' | 'fresh';
+
+// Issue #45 / ADR 0017: a One-Off Truck/Trailer, or a brand-new Profile
+// added inline - two extra `<select>` options above the real saved-Profile
+// list. Distinct string sentinels (never numeric) so they can never be
+// confused with a real Profile's `id`.
+type PickerMode = 'pick' | 'oneoff' | 'addnew';
+const ONE_OFF_SENTINEL = '__one_off__';
+const ADD_NEW_SENTINEL = '__add_new__';
 
 export default function WeighEventNew() {
   const { theme } = useAppTheme();
@@ -27,8 +39,15 @@ export default function WeighEventNew() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [step, setStep] = useState<Step>('pick');
+  const [truckMode, setTruckMode] = useState<PickerMode>('pick');
+  const [trailerMode, setTrailerMode] = useState<PickerMode>('pick');
   const [truckId, setTruckId] = useState<number | ''>('');
   const [trailerId, setTrailerId] = useState<number | ''>('');
+  // Holds a One-Off Truck/Trailer's raw rating fields locally - never sent
+  // to `api.createTruck`/`createTrailer`, only inlined on the eventual
+  // `POST /weigh-events` call (issue #45's own Implementation Decisions).
+  const [oneOffTruck, setOneOffTruck] = useState<TruckProfileIn | null>(null);
+  const [oneOffTrailer, setOneOffTrailer] = useState<TrailerProfileIn | null>(null);
 
   // Story 19: told upfront whether a reusable Solo weight is available.
   const [reusable, setReusable] = useState<ReusableSoloTicket | null | undefined>(undefined);
@@ -67,14 +86,89 @@ export default function WeighEventNew() {
     })();
   }, []);
 
+  function handleTruckSelectChange(value: string) {
+    if (value === ONE_OFF_SENTINEL) {
+      setTruckMode('oneoff');
+      setTruckId('');
+    } else if (value === ADD_NEW_SENTINEL) {
+      setTruckMode('addnew');
+      setTruckId('');
+    } else {
+      setTruckMode('pick');
+      setOneOffTruck(null);
+      setTruckId(value === '' ? '' : Number(value));
+    }
+  }
+
+  function handleTrailerSelectChange(value: string) {
+    if (value === ONE_OFF_SENTINEL) {
+      setTrailerMode('oneoff');
+      setTrailerId('');
+    } else if (value === ADD_NEW_SENTINEL) {
+      setTrailerMode('addnew');
+      setTrailerId('');
+    } else {
+      setTrailerMode('pick');
+      setOneOffTrailer(null);
+      setTrailerId(value === '' ? '' : Number(value));
+    }
+  }
+
+  async function handleOneOffTruckSubmit(payload: TruckProfileIn): Promise<void> {
+    setOneOffTruck(payload);
+  }
+
+  async function handleAddNewTruckSubmit(payload: TruckProfileIn): Promise<void> {
+    const created = await api.createTruck(payload);
+    setTrucks((prev) => (prev ? [...prev, created] : [created]));
+    setTruckMode('pick');
+    setTruckId(created.id);
+  }
+
+  async function handleOneOffTrailerSubmit(payload: TrailerProfileIn): Promise<void> {
+    setOneOffTrailer(payload);
+  }
+
+  async function handleAddNewTrailerSubmit(payload: TrailerProfileIn): Promise<void> {
+    const created = await api.createTrailer(payload);
+    setTrailers((prev) => (prev ? [...prev, created] : [created]));
+    setTrailerMode('pick');
+    setTrailerId(created.id);
+  }
+
+  const truckReady =
+    truckMode === 'pick' ? truckId !== '' : truckMode === 'oneoff' ? oneOffTruck !== null : false;
+  const trailerReady =
+    trailerMode === 'pick'
+      ? trailerId !== ''
+      : trailerMode === 'oneoff'
+        ? oneOffTrailer !== null
+        : false;
+
+  const truckSelectValue =
+    truckMode === 'oneoff' ? ONE_OFF_SENTINEL : truckMode === 'addnew' ? ADD_NEW_SENTINEL : String(truckId);
+  const trailerSelectValue =
+    trailerMode === 'oneoff'
+      ? ONE_OFF_SENTINEL
+      : trailerMode === 'addnew'
+        ? ADD_NEW_SENTINEL
+        : String(trailerId);
+
   async function chooseProfiles() {
-    if (truckId === '' || trailerId === '') return;
+    if (!truckReady || !trailerReady) return;
     setReusable(undefined);
-    try {
-      const found = await api.getReusableSoloTicket(Number(truckId));
-      setReusable(found);
-      setReuseGross(found ? String(found.gross) : '');
-    } catch {
+    if (truckMode === 'pick') {
+      try {
+        const found = await api.getReusableSoloTicket(Number(truckId));
+        setReusable(found);
+        setReuseGross(found ? String(found.gross) : '');
+      } catch {
+        setReusable(null);
+      }
+    } else {
+      // Story 8: a One-Off Truck has no history - never call the
+      // reusable-Solo-Ticket endpoint, and behave as if it resolved to
+      // null (no reusable Solo weight, no network delay/checking state).
       setReusable(null);
     }
     setStep('combined');
@@ -122,13 +216,13 @@ export default function WeighEventNew() {
   }
 
   async function submitWeighEvent(opts: { confirmLink?: boolean; dropSolo?: boolean } = {}) {
-    if (truckId === '' || trailerId === '') return;
+    if (!truckReady || !trailerReady) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
       const created = await api.createWeighEvent({
-        truck_id: Number(truckId),
-        trailer_id: Number(trailerId),
+        ...(truckMode === 'pick' ? { truck_id: Number(truckId) } : { truck: oneOffTruck! }),
+        ...(trailerMode === 'pick' ? { trailer_id: Number(trailerId) } : { trailer: oneOffTrailer! }),
         combined: {
           steer: Number(steer),
           drive: Number(drive),
@@ -175,24 +269,6 @@ export default function WeighEventNew() {
     return <p style={{ color: theme.text2 }}>Loading…</p>;
   }
 
-  // Story 17: no confusing empty picker - a clear prompt to add one first.
-  if (trucks.length === 0 || trailers.length === 0) {
-    return (
-      <Card theme={theme}>
-        <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: '1.3rem' }}>
-          Add a Truck and Trailer Profile first
-        </h2>
-        <p style={{ color: theme.text2 }}>
-          You need at least one Truck Profile and one Trailer Profile in your Garage before you can
-          record a Weigh Event.
-        </p>
-        <Link to="/garage" style={{ color: theme.linkStrong, fontWeight: 700 }}>
-          Go to your Garage
-        </Link>
-      </Card>
-    );
-  }
-
   if (step === 'result' && result) {
     return (
       <Card theme={theme}>
@@ -220,36 +296,86 @@ export default function WeighEventNew() {
               <label htmlFor="weigh-event-truck" style={{ fontWeight: 600, fontSize: '0.85rem', color: theme.text2 }}>Truck Profile</label>
               <select
                 id="weigh-event-truck"
-                value={truckId}
-                onChange={(e) => setTruckId(e.target.value === '' ? '' : Number(e.target.value))}
+                value={truckSelectValue}
+                onChange={(e) => handleTruckSelectChange(e.target.value)}
                 style={{ display: 'block', width: '100%', height: 44, marginTop: 6, borderRadius: 10, border: `1.5px solid ${theme.border}` }}
               >
                 <option value="">Select a Truck…</option>
+                <option value={ONE_OFF_SENTINEL}>Enter a one-off Truck</option>
+                <option value={ADD_NEW_SENTINEL}>Add new Truck to my Garage</option>
                 {trucks.map((t) => (
                   <option key={t.id} value={t.id}>{t.nickname}</option>
                 ))}
               </select>
+              {truckMode === 'oneoff' && (
+                <div style={{ marginTop: 12 }}>
+                  <TruckProfileForm
+                    submitLabel="Use this Truck"
+                    onSubmit={handleOneOffTruckSubmit}
+                    onCancel={() => handleTruckSelectChange('')}
+                  />
+                  {oneOffTruck && (
+                    <p style={{ fontSize: '0.8rem', color: theme.text2, marginTop: 8 }}>
+                      One-off Truck ready.
+                    </p>
+                  )}
+                </div>
+              )}
+              {truckMode === 'addnew' && (
+                <div style={{ marginTop: 12 }}>
+                  <TruckProfileForm
+                    submitLabel="Add Truck"
+                    onSubmit={handleAddNewTruckSubmit}
+                    onCancel={() => handleTruckSelectChange('')}
+                  />
+                </div>
+              )}
             </div>
             <div>
               <label htmlFor="weigh-event-trailer" style={{ fontWeight: 600, fontSize: '0.85rem', color: theme.text2 }}>Trailer Profile</label>
               <select
                 id="weigh-event-trailer"
-                value={trailerId}
-                onChange={(e) => setTrailerId(e.target.value === '' ? '' : Number(e.target.value))}
+                value={trailerSelectValue}
+                onChange={(e) => handleTrailerSelectChange(e.target.value)}
                 style={{ display: 'block', width: '100%', height: 44, marginTop: 6, borderRadius: 10, border: `1.5px solid ${theme.border}` }}
               >
                 <option value="">Select a Trailer…</option>
+                <option value={ONE_OFF_SENTINEL}>Enter a one-off Trailer</option>
+                <option value={ADD_NEW_SENTINEL}>Add new Trailer to my Garage</option>
                 {trailers.map((t) => (
                   <option key={t.id} value={t.id}>{t.nickname}</option>
                 ))}
               </select>
+              {trailerMode === 'oneoff' && (
+                <div style={{ marginTop: 12 }}>
+                  <TrailerProfileForm
+                    submitLabel="Use this Trailer"
+                    onSubmit={handleOneOffTrailerSubmit}
+                    onCancel={() => handleTrailerSelectChange('')}
+                  />
+                  {oneOffTrailer && (
+                    <p style={{ fontSize: '0.8rem', color: theme.text2, marginTop: 8 }}>
+                      One-off Trailer ready.
+                    </p>
+                  )}
+                </div>
+              )}
+              {trailerMode === 'addnew' && (
+                <div style={{ marginTop: 12 }}>
+                  <TrailerProfileForm
+                    submitLabel="Add Trailer"
+                    onSubmit={handleAddNewTrailerSubmit}
+                    onCancel={() => handleTrailerSelectChange('')}
+                  />
+                </div>
+              )}
             </div>
           </div>
           <PrimaryButton
             theme={theme}
             full
             style={{ marginTop: 22 }}
-            disabled={truckId === '' || trailerId === ''}
+            disabled={!truckReady || !trailerReady}
             onClick={() => void chooseProfiles()}
           >
             Next

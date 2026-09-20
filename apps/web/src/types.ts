@@ -117,9 +117,17 @@ export interface ReusedSoloTicketIn {
 
 export type SoloTicketIn = FreshSoloTicketIn | ReusedSoloTicketIn;
 
+// `truck_id`/`truck` (and `trailer_id`/`trailer`) are each an exactly-one-of
+// pair (issue #45 / ADR 0017): a real, saved Truck/Trailer Profile's id, or
+// a One-Off Truck/Trailer's raw rating fields - `TruckProfileIn`/
+// `TrailerProfileIn` reused directly, since a One-Off's shape (ratings plus
+// an optional Nickname) is exactly that type's own shape. The backend
+// rejects neither-or-both per side as a 422.
 export interface WeighEventCreateRequest {
-  truck_id: number;
-  trailer_id: number;
+  truck_id?: number | null;
+  truck?: TruckProfileIn | null;
+  trailer_id?: number | null;
+  trailer?: TrailerProfileIn | null;
   combined: CombinedTicketIn;
   solo?: SoloTicketIn | null;
   confirm_solo_link?: boolean;
@@ -130,6 +138,11 @@ export interface WeighEventOut {
   timestamp: string;
   truck_nickname: string;
   trailer_nickname: string;
+  // `null` exactly when that side is a One-Off Truck/Trailer (issue #45 /
+  // ADR 0017) - History keys its "(one-off)" badge and fallback label off
+  // this, not off Nickname presence/absence.
+  truck_id: number | null;
+  trailer_id: number | null;
   overall_status: Status;
   checks: CheckOut[];
   time_gap_hours: number | null;
